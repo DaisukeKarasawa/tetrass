@@ -42,14 +42,25 @@ async function fetchContributionCalendar(login, token) {
   if (token) headers.Authorization = `Bearer ${token}`;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), GITHUB_GRAPHQL_FETCH_TIMEOUT_MS);
-  let res;
   try {
-    res = await fetch("https://api.github.com/graphql", {
+    const res = await fetch("https://api.github.com/graphql", {
       method: "POST",
       headers,
       body: JSON.stringify({ query: GRAPHQL, variables: { login } }),
       signal: controller.signal
     });
+    if (!res.ok) {
+      const raw = await res.text();
+      const snippet = truncateForErrorLog(raw, MAX_HTTP_ERROR_BODY_CHARS);
+      throw new Error(`GitHub GraphQL HTTP ${res.status}: ${snippet}`);
+    }
+    const body = await res.json();
+    if (body.errors?.length) {
+      throw new Error(`GitHub GraphQL errors: ${body.errors.map((e) => e.message).join("; ")}`);
+    }
+    const cal = body.data?.user?.contributionsCollection?.contributionCalendar;
+    if (!cal) throw new Error("No contribution calendar returned (user missing or private?)");
+    return cal;
   } catch (e) {
     if (isAbortLike(e)) {
       throw new Error(
@@ -60,18 +71,6 @@ async function fetchContributionCalendar(login, token) {
   } finally {
     clearTimeout(timeoutId);
   }
-  if (!res.ok) {
-    const raw = await res.text();
-    const snippet = truncateForErrorLog(raw, MAX_HTTP_ERROR_BODY_CHARS);
-    throw new Error(`GitHub GraphQL HTTP ${res.status}: ${snippet}`);
-  }
-  const body = await res.json();
-  if (body.errors?.length) {
-    throw new Error(`GitHub GraphQL errors: ${body.errors.map((e) => e.message).join("; ")}`);
-  }
-  const cal = body.data?.user?.contributionsCollection?.contributionCalendar;
-  if (!cal) throw new Error("No contribution calendar returned (user missing or private?)");
-  return cal;
 }
 function flattenContributionDays(cal) {
   const days = [];

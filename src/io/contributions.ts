@@ -54,14 +54,29 @@ export async function fetchContributionCalendar(
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), GITHUB_GRAPHQL_FETCH_TIMEOUT_MS);
-  let res: Response;
   try {
-    res = await fetch("https://api.github.com/graphql", {
+    const res = await fetch("https://api.github.com/graphql", {
       method: "POST",
       headers,
       body: JSON.stringify({ query: GRAPHQL, variables: { login } }),
       signal: controller.signal,
     });
+
+    if (!res.ok) {
+      const raw = await res.text();
+      const snippet = truncateForErrorLog(raw, MAX_HTTP_ERROR_BODY_CHARS);
+      throw new Error(`GitHub GraphQL HTTP ${res.status}: ${snippet}`);
+    }
+    const body = (await res.json()) as {
+      data?: { user?: { contributionsCollection?: { contributionCalendar: ContributionCalendar } } };
+      errors?: { message: string }[];
+    };
+    if (body.errors?.length) {
+      throw new Error(`GitHub GraphQL errors: ${body.errors.map((e) => e.message).join("; ")}`);
+    }
+    const cal = body.data?.user?.contributionsCollection?.contributionCalendar;
+    if (!cal) throw new Error("No contribution calendar returned (user missing or private?)");
+    return cal;
   } catch (e) {
     if (isAbortLike(e)) {
       throw new Error(
@@ -72,22 +87,6 @@ export async function fetchContributionCalendar(
   } finally {
     clearTimeout(timeoutId);
   }
-
-  if (!res.ok) {
-    const raw = await res.text();
-    const snippet = truncateForErrorLog(raw, MAX_HTTP_ERROR_BODY_CHARS);
-    throw new Error(`GitHub GraphQL HTTP ${res.status}: ${snippet}`);
-  }
-  const body = (await res.json()) as {
-    data?: { user?: { contributionsCollection?: { contributionCalendar: ContributionCalendar } } };
-    errors?: { message: string }[];
-  };
-  if (body.errors?.length) {
-    throw new Error(`GitHub GraphQL errors: ${body.errors.map((e) => e.message).join("; ")}`);
-  }
-  const cal = body.data?.user?.contributionsCollection?.contributionCalendar;
-  if (!cal) throw new Error("No contribution calendar returned (user missing or private?)");
-  return cal;
 }
 
 /** Flatten GitHub calendar to chronological day list (oldest first). */
