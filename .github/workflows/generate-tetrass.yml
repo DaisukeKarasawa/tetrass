@@ -1,0 +1,36 @@
+name: Generate Tetrass
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * *"
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: git diff --exit-code action/index.mjs
+
+      - name: Generate SVGs
+        uses: ./action
+        with:
+          github_user_name: ${{ github.repository_owner }}
+          outputs: |
+            img/tetrass.svg
+            img/tetrass-dark.svg?palette=github-dark
+
+      - uses: stefanzweifel/git-auto-commit-action@b863ae1933cb653a53c021fe36dbb774e1fb9403 # v5.2.0
+        with:
+          commit_message: "chore: update Tetrass SVG"
+          file_pattern: "img/*.svg"
