@@ -1,0 +1,143 @@
+language: "ja-JP"
+
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    auto_incremental_review: true
+
+  # Reduce review noise from generated artifacts and dependencies.
+  path_filters:
+    - "!node_modules/**"
+    - "!dist/**"
+    - "!img/**/*.svg"
+    - "!action/index.mjs"
+    - "!package-lock.json"
+    - "!**/*.png"
+    - "!**/*.jpg"
+    - "!**/*.jpeg"
+    - "!**/*.gif"
+    - "!**/*.webp"
+
+  path_instructions:
+    - path: "src/generateRunner.ts"
+      instructions: |
+        Shared Action/CLI core. Prioritize:
+        - Deterministic invariants: final board equals target, line clears >= 1, used piece types >= 4
+        - Output path safety for user-supplied `outputs`
+        - No token/auth leakage in logs/errors
+        Prefer correctness and safety over style nits.
+
+    - path: "src/action-entry.ts"
+      instructions: |
+        Validate GitHub Action input handling:
+        - Required env parsing (`INPUT_GITHUB_USER_NAME`, `INPUT_OUTPUTS`)
+        - Safe workspace-root assumptions
+        - Actionable errors without secret leakage.
+
+    - path: "src/io/**/*.ts"
+      instructions: |
+        Review GitHub GraphQL and fallback behavior for:
+        - Auth handling and fallback correctness
+        - Safe error content (no token/header exposure)
+        - Stable behavior under rate limits and empty data.
+
+    - path: "src/planner/**/*.ts"
+      instructions: |
+        Deterministic planning logic. Focus on regressions in:
+        - Deterministic replay construction
+        - Trimming policy correctness and documented behavior
+        - Complexity blowups or accidental nondeterminism.
+
+    - path: "src/simulator/**/*.ts"
+      instructions: |
+        Validate Tetris rule correctness:
+        - Lock validity, overlap/collision, gravity/drop semantics, line clears.
+        Flag behavior changes that can break acceptance invariants.
+
+    - path: "src/verify/**/*.ts"
+      instructions: |
+        Final-state verification is a quality gate.
+        Treat weakening/removal as high severity unless strongly justified.
+
+    - path: "action/action.yml"
+      instructions: |
+        Treat as public contract. Any input/schema behavior change must be mirrored in
+        README usage and sample workflow.
+
+    - path: ".github/workflows/**/*.yml"
+      instructions: |
+        Check workflow reliability:
+        - Still invokes intended action contract
+        - Required inputs are supplied
+        - No insecure token misuse.
+
+    - path: "README.md"
+      instructions: |
+        This repo is consumed as a reusable action.
+        Verify usage snippet, input table, branch/tag pin advice, and output query examples
+        match action/action.yml and parser behavior.
+
+  pre_merge_checks:
+    title:
+      mode: "warning"
+      requirements: "Start with an imperative verb; prefer <= 80 characters."
+    description:
+      mode: "warning"
+    issue_assessment:
+      mode: "warning"
+    docstrings:
+      mode: "off"
+
+    override_requested_reviewers_only: true
+
+    custom_checks:
+      - name: "Action bundle sync"
+        mode: "warning"
+        instructions: |
+          Pass if either:
+          (A) PR does not modify runtime sources affecting action execution
+              (src/action-entry.ts, src/generateRunner.ts, src/io/**, src/planner/**,
+               src/simulator/**, src/renderer/**, src/verify/**, action/action.yml, package.json build scripts),
+          or
+          (B) action/index.mjs is modified in the same PR.
+          Fail otherwise.
+
+      - name: "Action contract docs sync"
+        mode: "warning"
+        instructions: |
+          Apply when PR changes action/action.yml inputs or output query semantics in
+          src/generateRunner.ts parseOutputLines.
+          Pass only if README usage snippet and Inputs section are updated consistently.
+          Fail when contract changed but README remains stale.
+
+      - name: "Output path boundary guard"
+        mode: "warning"
+        instructions: |
+          Apply only when PR touches src/generateRunner.ts or src/action-entry.ts.
+          Fail if user-provided output paths can resolve outside GITHUB_WORKSPACE without
+          explicit rejection logic.
+          Pass if unchanged or explicit boundary checks exist.
+
+      - name: "Determinism invariants evidence"
+        mode: "warning"
+        instructions: |
+          Apply when PR changes src/planner/**, src/simulator/**, or src/verify/**.
+          Pass only if PR includes tests or explicit PR-description evidence for:
+          - final board equals target
+          - line clears >= 1
+          - used piece types >= 4
+          Fail otherwise.
+
+      - name: "Workflow-action contract wiring"
+        mode: "warning"
+        instructions: |
+          Apply when .github/workflows/generate-tetrass.yml changes.
+          Pass if generation step still uses the expected action contract and supplies required
+          inputs: github_user_name and outputs.
+          Fail otherwise.
