@@ -91,7 +91,7 @@ describe("runTetrassGenerate", () => {
         outputs: [{ filePath: outputSymlink, palette: "light" }],
         workspaceRoot: workspace,
       }),
-    ).rejects.toThrow(/symbolic link/i);
+    ).rejects.toThrow(/outside workspace root|symbolic link/i);
 
     await rm(workspace, { recursive: true, force: true });
     await rm(outside, { recursive: true, force: true });

@@ -1,6 +1,6 @@
 import { constants as fsConstants, existsSync, realpathSync } from "node:fs";
 import { lstat, mkdir, open, writeFile } from "node:fs/promises";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import type { Board, ReplayScript } from "./domain/types.js";
 import {
@@ -127,16 +127,14 @@ export interface RenderAndWriteOpts {
 
 /** Expand frames, render SVG per palette (cached), write each output path. */
 export async function renderAndWriteReplayOutputs(opts: RenderAndWriteOpts): Promise<void> {
-  const { script, fast, outputs, workspaceRootResolved, workspaceRootCanonical } = opts;
+  const { script, fast, outputs, workspaceRootCanonical } = opts;
   const { frames } = simulateReplayForFrames(script);
   const svgByPalette = new Map<OutputPalette, string>();
 
   for (const out of outputs) {
     let filePath = out.filePath;
-    if (workspaceRootResolved && workspaceRootCanonical) {
-      assertPathInsideRoot(filePath, workspaceRootResolved, { requireProperDescendant: true });
-      const rel = relative(workspaceRootResolved, resolve(filePath));
-      filePath = join(workspaceRootCanonical, rel);
+    if (workspaceRootCanonical) {
+      assertPathInsideRoot(filePath, workspaceRootCanonical, { requireProperDescendant: true });
     }
     let svg = svgByPalette.get(out.palette);
     if (!svg) {
@@ -177,10 +175,17 @@ export async function runTetrassGenerate(opts: GenerateOptions): Promise<void> {
   });
   const { script, fast } = planAndVerifyReplay(days);
   const { workspaceRootResolved, workspaceRootCanonical } = resolveWorkspaceRoots(workspaceRoot);
+  const outputsForRender =
+    workspaceRootResolved != null
+      ? outputs.map((o) => ({
+          ...o,
+          filePath: canonicalizeOutputPathUnderWorkspace(resolve(o.filePath), workspaceRootResolved),
+        }))
+      : outputs;
   await renderAndWriteReplayOutputs({
     script,
     fast,
-    outputs,
+    outputs: outputsForRender,
     workspaceRootResolved,
     workspaceRootCanonical,
   });
@@ -229,6 +234,9 @@ function assertPathInsideRoot(
   const resolvedPath = resolve(filePath);
   const resolvedRoot = resolve(root);
   const rel = relative(resolvedRoot, resolvedPath);
+  if (isAbsolute(rel)) {
+    throw new Error(`Output path '${filePath}' is outside workspace root '${root}'.`);
+  }
   if (opts?.requireProperDescendant && (rel === "" || rel === ".")) {
     throw new Error(`Output path '${filePath}' must be a file under workspace root '${root}'.`);
   }
