@@ -14,18 +14,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Verify build (TypeScript + action bundle)
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
       - run: npm ci
       - run: npm run build
+      - run: git diff --exit-code action/index.mjs
 
       - name: Generate SVGs
         uses: ./action
         with:
-          github_user_name: ${{ github.repository_owner }}
+          github_user_name: ${{ github.actor }}
           outputs: |
             img/tetrass.svg
             img/tetrass-dark.svg?palette=github-dark
