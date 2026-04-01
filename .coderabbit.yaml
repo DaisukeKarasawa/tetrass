@@ -119,10 +119,15 @@ reviews:
       - name: "Output path boundary guard"
         mode: "warning"
         instructions: |
-          Apply only when PR touches src/generateRunner.ts or src/action-entry.ts.
-          Fail if user-provided output paths can resolve outside GITHUB_WORKSPACE without
-          explicit rejection logic.
-          Pass if unchanged or explicit boundary checks exist.
+          Step 1 — Scope: Use the PR changed-files list (or equivalent diff summary). If
+          neither src/generateRunner.ts nor src/action-entry.ts appears in the changed paths,
+          the result is **Pass** with reason "N/A: output-path logic files unchanged." Do not
+          leave this check inconclusive when both paths are absent from the change set.
+
+          Step 2 — Only when at least one of those files is modified: verify user-provided
+          output paths cannot resolve outside GITHUB_WORKSPACE without explicit rejection
+          logic. Fail if that risk exists; Pass if boundary checks are present or clearly
+          unchanged in a safe way.
 
       - name: "Determinism invariants evidence"
         mode: "warning"
