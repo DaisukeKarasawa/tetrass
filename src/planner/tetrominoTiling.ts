@@ -112,18 +112,12 @@ function tryTile(target: Board, minDistinctTypes: number): ReplayStep[] | null {
   const maxDfsVisits = TILING_DFS_VISIT_BUDGET_BASE + grass.length * TILING_DFS_VISIT_BUDGET_PER_GRASS_CELL;
   let dfsVisitCount = 0;
 
+  /** `grass` is row-major (y then x) from {@link grassCells}, so the first unfilled cell is min (y, x). */
   function pickNextCell(): [number, number] | null {
-    let best: [number, number] | null = null;
     for (const [x, y] of grass) {
-      const k = `${x},${y}`;
-      if (filled.has(k)) continue;
-      if (!best) {
-        best = [x, y];
-        continue;
-      }
-      if (y < best[1] || (y === best[1] && x < best[0])) best = [x, y];
+      if (!filled.has(`${x},${y}`)) return [x, y];
     }
-    return best;
+    return null;
   }
 
   function dfs(): boolean {

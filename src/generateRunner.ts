@@ -134,14 +134,8 @@ export async function renderAndWriteReplayOutputs(opts: RenderAndWriteOpts): Pro
   for (const out of outputs) {
     let filePath = out.filePath;
     if (workspaceRootResolved && workspaceRootCanonical) {
-      assertPathInsideRoot(filePath, workspaceRootResolved);
+      assertPathInsideRoot(filePath, workspaceRootResolved, { requireProperDescendant: true });
       const rel = relative(workspaceRootResolved, resolve(filePath));
-      if (rel === "" || rel === ".") {
-        throw new Error(`Output path '${filePath}' must be a file under workspace root '${workspaceRootResolved}'.`);
-      }
-      if (rel.startsWith("..") || rel.includes(`${sep}..${sep}`) || rel === "..") {
-        throw new Error(`Output path '${filePath}' is outside workspace root '${workspaceRootResolved}'.`);
-      }
       filePath = join(workspaceRootCanonical, rel);
     }
     let svg = svgByPalette.get(out.palette);
@@ -221,15 +215,23 @@ export function parseOutputLines(raw: string, workspaceRoot: string): OutputTarg
       throw new Error(`Invalid output path: '${trimmed}'`);
     }
     const abs = resolve(workspaceRoot, filePart);
-    assertPathInsideRoot(abs, normalizedRoot);
     const filePath = canonicalizeOutputPathUnderWorkspace(abs, normalizedRoot);
     result.push({ filePath, palette });
   }
   return result;
 }
 
-function assertPathInsideRoot(filePath: string, root: string): void {
-  const rel = relative(root, filePath);
+function assertPathInsideRoot(
+  filePath: string,
+  root: string,
+  opts?: { requireProperDescendant?: boolean },
+): void {
+  const resolvedPath = resolve(filePath);
+  const resolvedRoot = resolve(root);
+  const rel = relative(resolvedRoot, resolvedPath);
+  if (opts?.requireProperDescendant && (rel === "" || rel === ".")) {
+    throw new Error(`Output path '${filePath}' must be a file under workspace root '${root}'.`);
+  }
   if (rel === "") return;
   if (rel.startsWith("..") || rel.includes(`${sep}..${sep}`) || rel === "..") {
     throw new Error(`Output path '${filePath}' is outside workspace root '${root}'.`);
@@ -250,12 +252,8 @@ function canonicalWorkspaceRootDir(workspaceResolved: string): string {
  */
 function canonicalizeOutputPathUnderWorkspace(lexicalAbs: string, workspaceResolved: string): string {
   const rootCanon = canonicalWorkspaceRootDir(workspaceResolved);
+  assertPathInsideRoot(lexicalAbs, workspaceResolved, { requireProperDescendant: true });
   const rel = relative(workspaceResolved, lexicalAbs);
-  if (rel === "" || rel === ".") {
-    throw new Error(
-      `Output path '${lexicalAbs}' must be a file under workspace root '${workspaceResolved}'.`,
-    );
-  }
   const parts = rel.split(sep).filter((p) => p.length > 0);
   let cur = rootCanon;
   for (let i = 0; i < parts.length; i++) {
@@ -281,10 +279,6 @@ function isErrnoCode(e: unknown, code: string): boolean {
  * Mitigates escape via pre-existing symlink at the output path after directory checks.
  */
 async function writeUtf8FileRejectSymlinkTarget(filePath: string, data: string): Promise<void> {
-  const baseFlags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC;
-  const flags =
-    fsConstants.O_NOFOLLOW !== undefined ? baseFlags | fsConstants.O_NOFOLLOW : baseFlags;
-
   if (fsConstants.O_NOFOLLOW === undefined) {
     try {
       const st = await lstat(filePath);
@@ -297,6 +291,9 @@ async function writeUtf8FileRejectSymlinkTarget(filePath: string, data: string):
     await writeFile(filePath, data, "utf8");
     return;
   }
+
+  const flags =
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW;
 
   let handle: Awaited<ReturnType<typeof open>>;
   try {

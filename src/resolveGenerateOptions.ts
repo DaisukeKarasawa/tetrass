@@ -2,8 +2,8 @@ import { join } from "node:path";
 
 import { parseOutputLines, type GenerateOptions } from "./generateRunner.js";
 
-/** Same rule as GitHub username / org login (defensive; CLI does not require this when using sample mode). */
-const GITHUB_LOGIN_LIKE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/;
+/** Same rule as GitHub username / org login whenever a login string is supplied (CLI env or action input). */
+const GITHUB_LOGIN_LIKE = /^(?!.*--)[a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/;
 
 export type ResolveGenerateOptionsArgs =
   | { context: "cli"; repoRoot: string }
@@ -30,6 +30,9 @@ export function resolveGenerateOptions(
       throw new Error(
         "Set GITHUB_LOGIN or GITHUB_REPOSITORY_OWNER, or TETRASS_USE_SAMPLE=1 for offline mode.",
       );
+    }
+    if (login && !GITHUB_LOGIN_LIKE.test(login)) {
+      throw new Error("Invalid GitHub username format.");
     }
     const outputsEnv = env.TETRASS_OUTPUTS?.trim();
     const outputs = outputsEnv

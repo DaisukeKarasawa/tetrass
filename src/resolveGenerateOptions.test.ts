@@ -27,6 +27,20 @@ describe("resolveGenerateOptions", () => {
       ).toThrow(/Invalid GitHub username format/);
     });
 
+    it("rejects logins with consecutive hyphens", () => {
+      expect(() =>
+        resolveGenerateOptions(
+          {
+            INPUT_GITHUB_USER_NAME: "bad--name",
+            INPUT_OUTPUTS: "./img/a.svg",
+            GITHUB_WORKSPACE: "/ws",
+            GITHUB_TOKEN: "t",
+          },
+          { context: "github-action" },
+        ),
+      ).toThrow(/Invalid GitHub username format/);
+    });
+
     it("requires GITHUB_TOKEN when not in sample mode", () => {
       expect(() =>
         resolveGenerateOptions(
@@ -88,6 +102,26 @@ describe("resolveGenerateOptions", () => {
         { context: "cli", repoRoot: "/r" },
       );
       expect(opts.login).toBe("alice");
+    });
+
+    it("rejects invalid login format like github-action", () => {
+      expect(() =>
+        resolveGenerateOptions(
+          {
+            GITHUB_LOGIN: "bad..name",
+            TETRASS_USE_SAMPLE: "1",
+          },
+          { context: "cli", repoRoot: "/repo" },
+        ),
+      ).toThrow(/Invalid GitHub username format/);
+    });
+
+    it("does not validate synthetic sample login when no env login is set", () => {
+      const opts = resolveGenerateOptions(
+        { TETRASS_USE_SAMPLE: "1" },
+        { context: "cli", repoRoot: "/repo" },
+      );
+      expect(opts.login).toBe("sample");
     });
   });
 });

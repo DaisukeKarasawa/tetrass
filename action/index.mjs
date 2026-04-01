@@ -9,9 +9,14 @@ var BOARD_HEIGHT = 20;
 
 // src/io/contributions.ts
 var MAX_HTTP_ERROR_BODY_CHARS = 500;
+var GITHUB_GRAPHQL_FETCH_TIMEOUT_MS = 3e4;
 function truncateForErrorLog(text, maxChars) {
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}\u2026`;
+}
+function isAbortLike(e) {
+  if (e instanceof Error && e.name === "AbortError") return true;
+  return typeof DOMException !== "undefined" && e instanceof DOMException && e.name === "AbortError";
 }
 var GRAPHQL = `
 query($login: String!) {
@@ -35,11 +40,26 @@ async function fetchContributionCalendar(login, token) {
     "User-Agent": "tetrass-generator"
   };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch("https://api.github.com/graphql", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ query: GRAPHQL, variables: { login } })
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GITHUB_GRAPHQL_FETCH_TIMEOUT_MS);
+  let res;
+  try {
+    res = await fetch("https://api.github.com/graphql", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ query: GRAPHQL, variables: { login } }),
+      signal: controller.signal
+    });
+  } catch (e) {
+    if (isAbortLike(e)) {
+      throw new Error(
+        `GitHub GraphQL request timed out after ${GITHUB_GRAPHQL_FETCH_TIMEOUT_MS}ms`
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeoutId);
+  }
   if (!res.ok) {
     const raw = await res.text();
     const snippet = truncateForErrorLog(raw, MAX_HTTP_ERROR_BODY_CHARS);
@@ -275,6 +295,42 @@ function dropStride(dropRows) {
   if (dropRows <= 0) return 1;
   return Math.max(1, Math.ceil(dropRows / MAX_SOFT_DROP_SAMPLE_STEPS));
 }
+function appendPreLockDropFrames(frames, board, lock) {
+  let current = spawnAboveLock(lock);
+  const targetY = lock.y;
+  const stride = dropStride(targetY - current.y);
+  const verticalPath = [current];
+  while (current.y < targetY) {
+    const nextY = Math.min(targetY, current.y + stride);
+    const next = { ...current, y: nextY };
+    const cells = getCells(next.type, next.rotation, next.x, next.y);
+    if (!placementFits(board, cells)) break;
+    current = next;
+    if (current.y < targetY) {
+      verticalPath.push(current);
+    }
+  }
+  while (current.y < targetY) {
+    const next = { ...current, y: current.y + 1 };
+    const cells = getCells(next.type, next.rotation, next.x, next.y);
+    if (!placementFits(board, cells)) break;
+    current = next;
+  }
+  const verticalReachesLock = current.x === lock.x && current.y === lock.y && current.rotation === lock.rotation;
+  if (verticalReachesLock) {
+    verticalPath.push(current);
+    for (const p of verticalPath) {
+      frames.push({ board: cloneBoard(board), active: p, linesClearedThisLock: 0 });
+    }
+  } else {
+    frames.push({
+      board: cloneBoard(board),
+      active: spawnAboveLock(lock),
+      linesClearedThisLock: 0
+    });
+    frames.push({ board: cloneBoard(board), active: lock, linesClearedThisLock: 0 });
+  }
+}
 function simulateReplayForFrames(script) {
   const board = createEmptyBoard();
   const frames = [];
@@ -287,32 +343,7 @@ function simulateReplayForFrames(script) {
     if (!isValidLock(board, lock)) {
       throw new Error(`Invalid lock placement: ${JSON.stringify(lock)}`);
     }
-    let current = spawnAboveLock(lock);
-    const targetY = lock.y;
-    const stride = dropStride(targetY - current.y);
-    frames.push({ board: cloneBoard(board), active: current, linesClearedThisLock: 0 });
-    while (current.y < targetY) {
-      const nextY = Math.min(targetY, current.y + stride);
-      const next = { ...current, y: nextY };
-      const cells = getCells(next.type, next.rotation, next.x, next.y);
-      if (!placementFits(board, cells)) break;
-      current = next;
-      if (current.y < targetY) {
-        frames.push({ board: cloneBoard(board), active: current, linesClearedThisLock: 0 });
-      }
-    }
-    while (current.y < targetY) {
-      const next = { ...current, y: current.y + 1 };
-      const cells = getCells(next.type, next.rotation, next.x, next.y);
-      if (!placementFits(board, cells)) break;
-      current = next;
-    }
-    if (current.x !== lock.x || current.y !== lock.y || current.rotation !== lock.rotation) {
-      throw new Error(
-        `Drop did not reach lock: got ${JSON.stringify(current)} want ${JSON.stringify(lock)}`
-      );
-    }
-    frames.push({ board: cloneBoard(board), active: current, linesClearedThisLock: 0 });
+    appendPreLockDropFrames(frames, board, lock);
     const { linesCleared } = applyPlacement(board, lock);
     totalLineClears += linesCleared;
     frames.push({
@@ -425,17 +456,10 @@ function tryTile(target, minDistinctTypes) {
   const maxDfsVisits = TILING_DFS_VISIT_BUDGET_BASE + grass.length * TILING_DFS_VISIT_BUDGET_PER_GRASS_CELL;
   let dfsVisitCount = 0;
   function pickNextCell() {
-    let best = null;
     for (const [x, y] of grass) {
-      const k = `${x},${y}`;
-      if (filled.has(k)) continue;
-      if (!best) {
-        best = [x, y];
-        continue;
-      }
-      if (y < best[1] || y === best[1] && x < best[0]) best = [x, y];
+      if (!filled.has(`${x},${y}`)) return [x, y];
     }
-    return best;
+    return null;
   }
   function dfs() {
     if (dfsVisitCount >= maxDfsVisits) return false;
@@ -563,6 +587,83 @@ var PALETTE_DARK = {
   grass: "#39d353",
   ghost: "#0e4429"
 };
+var DEFAULT_SAFE_COLOR = "#ebedf0";
+var CSS_NAMED_COLORS = new Set(
+  `aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato transparent turquoise violet wheat white whitesmoke yellow yellowgreen`.split(
+    /\s+/
+  )
+);
+function hasDangerousColorContent(raw) {
+  const lower = raw.toLowerCase();
+  if (raw.includes('"') || raw.includes("'") || raw.includes("<") || raw.includes(">") || raw.includes("&") || raw.includes("\\")) {
+    return true;
+  }
+  if (lower.includes("url(")) return true;
+  if (raw.includes("/*") || raw.includes("*/")) return true;
+  if (/[\u0000-\u001f\u007f]/.test(raw)) return true;
+  return false;
+}
+function validateRgbLikeChannel(part) {
+  const p = part.trim();
+  if (p.endsWith("%")) {
+    const n = p.slice(0, -1);
+    if (!/^\d+(\.\d+)?$/.test(n)) return false;
+    const v2 = Number(n);
+    return Number.isFinite(v2) && v2 >= 0 && v2 <= 100;
+  }
+  if (!/^\d+$/.test(p)) return false;
+  const v = Number(p);
+  return v >= 0 && v <= 255;
+}
+function validateAlphaChannel(part) {
+  const p = part.trim();
+  if (p.endsWith("%")) {
+    const n = p.slice(0, -1);
+    if (!/^\d+(\.\d+)?$/.test(n)) return false;
+    const v2 = Number(n);
+    return Number.isFinite(v2) && v2 >= 0 && v2 <= 100;
+  }
+  if (!/^\d+(\.\d+)?$/.test(p)) return false;
+  const v = Number(p);
+  return Number.isFinite(v) && v >= 0 && v <= 1;
+}
+function isValidRgbFunction(value) {
+  const m = /^rgb\(\s*([^)]+)\)$/i.exec(value);
+  if (!m) return false;
+  const parts = m[1].split(",").map((x) => x.trim());
+  if (parts.length !== 3) return false;
+  return parts.every(validateRgbLikeChannel);
+}
+function isValidRgbaFunction(value) {
+  const m = /^rgba\(\s*([^)]+)\)$/i.exec(value);
+  if (!m) return false;
+  const parts = m[1].split(",").map((x) => x.trim());
+  if (parts.length !== 4) return false;
+  const [r, g, b, a] = parts;
+  return validateRgbLikeChannel(r) && validateRgbLikeChannel(g) && validateRgbLikeChannel(b) && validateAlphaChannel(a);
+}
+function validateColor(value) {
+  const s = value.trim();
+  if (s.length === 0) return DEFAULT_SAFE_COLOR;
+  if (hasDangerousColorContent(s)) return DEFAULT_SAFE_COLOR;
+  if (/^#[0-9a-f]{3}$/i.test(s) || /^#[0-9a-f]{6}$/i.test(s)) {
+    return s;
+  }
+  if (isValidRgbFunction(s) || isValidRgbaFunction(s)) {
+    return s;
+  }
+  if (/^[a-z]+$/i.test(s) && CSS_NAMED_COLORS.has(s.toLowerCase())) {
+    return s.toLowerCase();
+  }
+  return DEFAULT_SAFE_COLOR;
+}
+function sanitizePalette(p) {
+  return {
+    empty: validateColor(p.empty),
+    grass: validateColor(p.grass),
+    ghost: validateColor(p.ghost)
+  };
+}
 var CELL = 18;
 var PAD = 2;
 var W = BOARD_WIDTH * CELL + PAD * 2;
@@ -575,9 +676,7 @@ function cellUse(x, y, href) {
   return `<use href="#${href}" x="${px}" y="${py}"/>`;
 }
 function buildSymbols(palette) {
-  const e = palette.empty;
-  const g = palette.grass;
-  const h = palette.ghost;
+  const { empty: e, grass: g, ghost: h } = sanitizePalette(palette);
   return `<defs>
 <symbol id="cE" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${e}" rx="2"/></symbol>
 <symbol id="cG" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${g}" rx="2"/></symbol>
@@ -609,6 +708,7 @@ function frameToSvgInner(frame) {
 }
 function buildAnimatedSvg(frames, palette) {
   if (frames.length === 0) throw new Error("No frames to render");
+  const safePalette = sanitizePalette(palette);
   const frameDurMs = SVG_FRAME_DURATION_MS;
   const holdLastMs = SVG_HOLD_LAST_FRAME_MS;
   const n = frames.length;
@@ -635,8 +735,8 @@ ${inner}
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Tetrass contribution animation">
 <title>Tetrass</title>
-${buildSymbols(palette)}
-<rect width="100%" height="100%" fill="${palette.empty}"/>
+${buildSymbols(safePalette)}
+<rect width="100%" height="100%" fill="${safePalette.empty}"/>
 ${groups.join("\n")}
 </svg>`;
 }
@@ -708,14 +808,8 @@ async function renderAndWriteReplayOutputs(opts) {
   for (const out of outputs) {
     let filePath = out.filePath;
     if (workspaceRootResolved && workspaceRootCanonical) {
-      assertPathInsideRoot(filePath, workspaceRootResolved);
+      assertPathInsideRoot(filePath, workspaceRootResolved, { requireProperDescendant: true });
       const rel = relative(workspaceRootResolved, resolve(filePath));
-      if (rel === "" || rel === ".") {
-        throw new Error(`Output path '${filePath}' must be a file under workspace root '${workspaceRootResolved}'.`);
-      }
-      if (rel.startsWith("..") || rel.includes(`${sep}..${sep}`) || rel === "..") {
-        throw new Error(`Output path '${filePath}' is outside workspace root '${workspaceRootResolved}'.`);
-      }
       filePath = join(workspaceRootCanonical, rel);
     }
     let svg = svgByPalette.get(out.palette);
@@ -785,14 +879,18 @@ function parseOutputLines(raw, workspaceRoot) {
       throw new Error(`Invalid output path: '${trimmed}'`);
     }
     const abs = resolve(workspaceRoot, filePart);
-    assertPathInsideRoot(abs, normalizedRoot);
     const filePath = canonicalizeOutputPathUnderWorkspace(abs, normalizedRoot);
     result.push({ filePath, palette });
   }
   return result;
 }
-function assertPathInsideRoot(filePath, root) {
-  const rel = relative(root, filePath);
+function assertPathInsideRoot(filePath, root, opts) {
+  const resolvedPath = resolve(filePath);
+  const resolvedRoot = resolve(root);
+  const rel = relative(resolvedRoot, resolvedPath);
+  if (opts?.requireProperDescendant && (rel === "" || rel === ".")) {
+    throw new Error(`Output path '${filePath}' must be a file under workspace root '${root}'.`);
+  }
   if (rel === "") return;
   if (rel.startsWith("..") || rel.includes(`${sep}..${sep}`) || rel === "..") {
     throw new Error(`Output path '${filePath}' is outside workspace root '${root}'.`);
@@ -807,12 +905,8 @@ function canonicalWorkspaceRootDir(workspaceResolved) {
 }
 function canonicalizeOutputPathUnderWorkspace(lexicalAbs, workspaceResolved) {
   const rootCanon = canonicalWorkspaceRootDir(workspaceResolved);
+  assertPathInsideRoot(lexicalAbs, workspaceResolved, { requireProperDescendant: true });
   const rel = relative(workspaceResolved, lexicalAbs);
-  if (rel === "" || rel === ".") {
-    throw new Error(
-      `Output path '${lexicalAbs}' must be a file under workspace root '${workspaceResolved}'.`
-    );
-  }
   const parts = rel.split(sep).filter((p) => p.length > 0);
   let cur = rootCanon;
   for (let i = 0; i < parts.length; i++) {
@@ -832,8 +926,6 @@ function isErrnoCode(e, code) {
   return typeof e === "object" && e !== null && "code" in e && e.code === code;
 }
 async function writeUtf8FileRejectSymlinkTarget(filePath, data) {
-  const baseFlags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC;
-  const flags = fsConstants.O_NOFOLLOW !== void 0 ? baseFlags | fsConstants.O_NOFOLLOW : baseFlags;
   if (fsConstants.O_NOFOLLOW === void 0) {
     try {
       const st = await lstat(filePath);
@@ -846,6 +938,7 @@ async function writeUtf8FileRejectSymlinkTarget(filePath, data) {
     await writeFile(filePath, data, "utf8");
     return;
   }
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW;
   let handle;
   try {
     handle = await open(filePath, flags, 420);
@@ -864,7 +957,7 @@ async function writeUtf8FileRejectSymlinkTarget(filePath, data) {
 
 // src/resolveGenerateOptions.ts
 import { join as join2 } from "node:path";
-var GITHUB_LOGIN_LIKE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/;
+var GITHUB_LOGIN_LIKE = /^(?!.*--)[a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/;
 function resolveGenerateOptions(env, args) {
   const useSample = env.TETRASS_USE_SAMPLE === "1" || env.TETRASS_OFFLINE === "1";
   const token = env.GITHUB_TOKEN?.trim() || void 0;
@@ -875,6 +968,9 @@ function resolveGenerateOptions(env, args) {
       throw new Error(
         "Set GITHUB_LOGIN or GITHUB_REPOSITORY_OWNER, or TETRASS_USE_SAMPLE=1 for offline mode."
       );
+    }
+    if (login2 && !GITHUB_LOGIN_LIKE.test(login2)) {
+      throw new Error("Invalid GitHub username format.");
     }
     const outputsEnv = env.TETRASS_OUTPUTS?.trim();
     const outputs2 = outputsEnv ? parseOutputLines(outputsEnv, repoRoot) : [

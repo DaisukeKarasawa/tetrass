@@ -101,11 +101,43 @@ describe("fetchContributionCalendar", () => {
       "https://api.github.com/graphql",
       expect.objectContaining({
         method: "POST",
+        signal: expect.any(AbortSignal),
         headers: expect.objectContaining({
           Authorization: "Bearer tok",
         }),
       }),
     );
+  });
+
+  it("throws when the GraphQL request exceeds the wall-clock timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      globalThis.fetch = vi.fn((_url, init?: RequestInit) => {
+        return new Promise<Response>((_resolve, reject) => {
+          const sig = init?.signal;
+          if (!sig) {
+            reject(new Error("expected AbortSignal"));
+            return;
+          }
+          const onAbort = (): void => {
+            const err = new Error("Aborted");
+            err.name = "AbortError";
+            reject(err);
+          };
+          if (sig.aborted) {
+            onAbort();
+            return;
+          }
+          sig.addEventListener("abort", onAbort, { once: true });
+        });
+      });
+      const p = fetchContributionCalendar("u", "tok");
+      const assertion = expect(p).rejects.toThrow(/timed out after 30000ms/);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await assertion;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("throws on GraphQL errors payload", async () => {

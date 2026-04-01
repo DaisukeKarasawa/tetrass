@@ -12,9 +12,17 @@ export interface ContributionCalendar {
 
 const MAX_HTTP_ERROR_BODY_CHARS = 500;
 
+/** Wall-clock limit for GitHub GraphQL `fetch` (CLI may run without an outer job timeout). */
+const GITHUB_GRAPHQL_FETCH_TIMEOUT_MS = 30_000;
+
 function truncateForErrorLog(text: string, maxChars: number): string {
   if (text.length <= maxChars) return text;
   return `${text.slice(0, maxChars)}…`;
+}
+
+function isAbortLike(e: unknown): boolean {
+  if (e instanceof Error && e.name === "AbortError") return true;
+  return typeof DOMException !== "undefined" && e instanceof DOMException && e.name === "AbortError";
 }
 
 const GRAPHQL = `
@@ -44,11 +52,27 @@ export async function fetchContributionCalendar(
   };
   if (token) headers.Authorization = `Bearer ${token}`;
 
-  const res = await fetch("https://api.github.com/graphql", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ query: GRAPHQL, variables: { login } }),
-  });
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), GITHUB_GRAPHQL_FETCH_TIMEOUT_MS);
+  let res: Response;
+  try {
+    res = await fetch("https://api.github.com/graphql", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ query: GRAPHQL, variables: { login } }),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    if (isAbortLike(e)) {
+      throw new Error(
+        `GitHub GraphQL request timed out after ${GITHUB_GRAPHQL_FETCH_TIMEOUT_MS}ms`,
+      );
+    }
+    throw e;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
   if (!res.ok) {
     const raw = await res.text();
     const snippet = truncateForErrorLog(raw, MAX_HTTP_ERROR_BODY_CHARS);

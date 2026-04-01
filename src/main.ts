@@ -13,12 +13,19 @@ async function generateCli(): Promise<void> {
 }
 
 const cmd = process.argv[2];
+const cliVerbose =
+  process.argv.includes("--verbose") || process.argv.includes("-v");
+
 if (cmd === "generate") {
   generateCli().catch((e) => {
-    console.error(e);
+    const message = e instanceof Error ? e.message : String(e);
+    console.error(message);
+    if (cliVerbose && e instanceof Error && e.stack) {
+      console.error(e.stack);
+    }
     process.exit(1);
   });
 } else {
-  console.error("Usage: node dist/main.js generate");
+  console.error("Usage: node dist/main.js generate [--verbose|-v]");
   process.exit(1);
 }
