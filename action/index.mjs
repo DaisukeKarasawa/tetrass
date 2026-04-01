@@ -1,6 +1,7 @@
 // src/generateRunner.ts
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, relative, resolve, sep } from "node:path";
+import { constants as fsConstants, existsSync, realpathSync } from "node:fs";
+import { lstat, mkdir, open, writeFile } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 // src/domain/types.ts
 var BOARD_WIDTH = 10;
@@ -635,26 +636,31 @@ function assertFinalMatchesTarget(finalBoard, target) {
 function paletteFor(kind) {
   return kind === "dark" ? PALETTE_DARK : PALETTE_LIGHT;
 }
-async function runTetrassGenerate(opts) {
-  const { login, token, outputs, useSample, workspaceRoot } = opts;
-  if (outputs.length === 0) throw new Error("At least one output path is required.");
-  let days;
+async function fetchOrBuildContributionDays(opts) {
+  const { login, token, useSample, allowUnauthenticatedFallback = false } = opts;
   if (useSample) {
-    days = buildSampleContributionDays();
     console.warn("Using deterministic sample contributions (offline/sample mode).");
-  } else {
-    try {
-      const cal = await fetchContributionCalendar(login, token);
-      days = flattenContributionDays(cal);
-    } catch (e) {
-      if (!token) {
-        console.warn("GitHub fetch failed without token; falling back to sample contributions.", e);
-        days = buildSampleContributionDays();
-      } else {
-        throw e;
-      }
-    }
+    return buildSampleContributionDays();
   }
+  try {
+    const cal = await fetchContributionCalendar(login, token);
+    return flattenContributionDays(cal);
+  } catch (e) {
+    if (!token) {
+      if (allowUnauthenticatedFallback) {
+        console.warn(
+          "GitHub fetch failed without token; falling back to sample contributions (TETRASS_ALLOW_UNAUTH_FALLBACK=1)."
+        );
+        return buildSampleContributionDays();
+      }
+      throw new Error(
+        "GitHub fetch failed with no GITHUB_TOKEN. Set GITHUB_TOKEN for real contribution data, use TETRASS_USE_SAMPLE=1 (or TETRASS_OFFLINE=1) for offline sample mode, or set TETRASS_ALLOW_UNAUTH_FALLBACK=1 for CLI-only opt-in when an unauthenticated fetch fails."
+      );
+    }
+    throw new Error(`GitHub API request failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+function planAndVerifyReplay(days) {
   const target = contributionDaysToTargetBoard(days);
   const { script, grassTarget } = planDeterministicReplay(target);
   const fast = simulateReplayFast(script);
@@ -665,25 +671,77 @@ async function runTetrassGenerate(opts) {
   if (fast.usedTypes.size < 4) {
     throw new Error(`Acceptance failed: need >=4 piece types, got ${fast.usedTypes.size}`);
   }
+  return { script, grassTarget, fast };
+}
+function resolveWorkspaceRoots(workspaceRoot) {
+  const workspaceRootResolved = workspaceRoot ? resolve(workspaceRoot) : null;
+  let workspaceRootCanonical = null;
+  if (workspaceRootResolved) {
+    try {
+      workspaceRootCanonical = realpathSync(workspaceRootResolved);
+    } catch {
+      workspaceRootCanonical = workspaceRootResolved;
+    }
+  }
+  return { workspaceRootResolved, workspaceRootCanonical };
+}
+async function renderAndWriteReplayOutputs(opts) {
+  const { script, fast, outputs, workspaceRootResolved, workspaceRootCanonical } = opts;
   const { frames } = simulateReplayForFrames(script);
   const svgByPalette = /* @__PURE__ */ new Map();
-  const normalizedWorkspaceRoot = workspaceRoot ? resolve(workspaceRoot) : null;
   for (const out of outputs) {
-    if (normalizedWorkspaceRoot) {
-      assertPathInsideRoot(out.filePath, normalizedWorkspaceRoot);
+    let filePath = out.filePath;
+    if (workspaceRootResolved && workspaceRootCanonical) {
+      assertPathInsideRoot(filePath, workspaceRootResolved);
+      const rel = relative(workspaceRootResolved, resolve(filePath));
+      if (rel === "" || rel === ".") {
+        throw new Error(`Output path '${filePath}' must be a file under workspace root '${workspaceRootResolved}'.`);
+      }
+      if (rel.startsWith("..") || rel.includes(`${sep}..${sep}`) || rel === "..") {
+        throw new Error(`Output path '${filePath}' is outside workspace root '${workspaceRootResolved}'.`);
+      }
+      filePath = join(workspaceRootCanonical, rel);
     }
     let svg = svgByPalette.get(out.palette);
     if (!svg) {
       svg = buildAnimatedSvg(frames, paletteFor(out.palette));
       svgByPalette.set(out.palette, svg);
     }
-    const dir = dirname(out.filePath);
+    const dir = dirname(filePath);
     await mkdir(dir, { recursive: true });
-    await writeFile(out.filePath, svg, "utf8");
+    let writeTarget = filePath;
+    if (workspaceRootCanonical) {
+      const realDir = realpathSync(dir);
+      assertPathInsideRoot(realDir, workspaceRootCanonical);
+      writeTarget = resolve(realDir, basename(filePath));
+      assertPathInsideRoot(writeTarget, workspaceRootCanonical);
+      await writeUtf8FileRejectSymlinkTarget(writeTarget, svg);
+    } else {
+      await writeFile(writeTarget, svg, "utf8");
+    }
   }
   console.log(
     `Wrote ${outputs.length} file(s) (${frames.length} frames, ${script.steps.length} locks, ${fast.totalLineClears} line clears).`
   );
+}
+async function runTetrassGenerate(opts) {
+  const { login, token, outputs, useSample, workspaceRoot, allowUnauthenticatedFallback } = opts;
+  if (outputs.length === 0) throw new Error("At least one output path is required.");
+  const days = await fetchOrBuildContributionDays({
+    login,
+    token,
+    useSample,
+    allowUnauthenticatedFallback
+  });
+  const { script, fast } = planAndVerifyReplay(days);
+  const { workspaceRootResolved, workspaceRootCanonical } = resolveWorkspaceRoots(workspaceRoot);
+  await renderAndWriteReplayOutputs({
+    script,
+    fast,
+    outputs,
+    workspaceRootResolved,
+    workspaceRootCanonical
+  });
 }
 function parseOutputLines(raw, workspaceRoot) {
   const normalizedRoot = resolve(workspaceRoot);
@@ -712,7 +770,8 @@ function parseOutputLines(raw, workspaceRoot) {
     }
     const abs = resolve(workspaceRoot, filePart);
     assertPathInsideRoot(abs, normalizedRoot);
-    result.push({ filePath: abs, palette });
+    const filePath = canonicalizeOutputPathUnderWorkspace(abs, normalizedRoot);
+    result.push({ filePath, palette });
   }
   return result;
 }
@@ -723,29 +782,137 @@ function assertPathInsideRoot(filePath, root) {
     throw new Error(`Output path '${filePath}' is outside workspace root '${root}'.`);
   }
 }
+function canonicalWorkspaceRootDir(workspaceResolved) {
+  try {
+    return realpathSync(workspaceResolved);
+  } catch {
+    return workspaceResolved;
+  }
+}
+function canonicalizeOutputPathUnderWorkspace(lexicalAbs, workspaceResolved) {
+  const rootCanon = canonicalWorkspaceRootDir(workspaceResolved);
+  const rel = relative(workspaceResolved, lexicalAbs);
+  if (rel === "" || rel === ".") {
+    throw new Error(
+      `Output path '${lexicalAbs}' must be a file under workspace root '${workspaceResolved}'.`
+    );
+  }
+  const parts = rel.split(sep).filter((p) => p.length > 0);
+  let cur = rootCanon;
+  for (let i = 0; i < parts.length; i++) {
+    const step = join(cur, parts[i]);
+    if (existsSync(step)) {
+      cur = realpathSync(step);
+      assertPathInsideRoot(cur, rootCanon);
+    } else {
+      cur = join(cur, ...parts.slice(i));
+      break;
+    }
+  }
+  assertPathInsideRoot(cur, rootCanon);
+  return cur;
+}
+function isErrnoCode(e, code) {
+  return typeof e === "object" && e !== null && "code" in e && e.code === code;
+}
+async function writeUtf8FileRejectSymlinkTarget(filePath, data) {
+  const baseFlags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC;
+  const flags = fsConstants.O_NOFOLLOW !== void 0 ? baseFlags | fsConstants.O_NOFOLLOW : baseFlags;
+  if (fsConstants.O_NOFOLLOW === void 0) {
+    try {
+      const st = await lstat(filePath);
+      if (st.isSymbolicLink()) {
+        throw new Error(`Refusing to write through symbolic link: '${filePath}'`);
+      }
+    } catch (e) {
+      if (!isErrnoCode(e, "ENOENT")) throw e;
+    }
+    await writeFile(filePath, data, "utf8");
+    return;
+  }
+  let handle;
+  try {
+    handle = await open(filePath, flags, 420);
+  } catch (e) {
+    if (isErrnoCode(e, "ELOOP")) {
+      throw new Error(`Refusing to open symbolic link as output: '${filePath}'`);
+    }
+    throw e;
+  }
+  try {
+    await handle.writeFile(data, "utf8");
+  } finally {
+    await handle.close();
+  }
+}
 
-// src/action-entry.ts
-async function main() {
-  const login = process.env.INPUT_GITHUB_USER_NAME?.trim();
-  const outputsRaw = process.env.INPUT_OUTPUTS ?? "";
-  const workspace = process.env.GITHUB_WORKSPACE ?? process.cwd();
-  const token = process.env.GITHUB_TOKEN?.trim() || void 0;
+// src/resolveGenerateOptions.ts
+import { join as join2 } from "node:path";
+var GITHUB_LOGIN_LIKE = /^[a-zA-Z0-9]([a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/;
+function resolveGenerateOptions(env, args) {
+  const useSample = env.TETRASS_USE_SAMPLE === "1" || env.TETRASS_OFFLINE === "1";
+  const token = env.GITHUB_TOKEN?.trim() || void 0;
+  if (args.context === "cli") {
+    const repoRoot = args.repoRoot;
+    const login2 = env.GITHUB_LOGIN?.trim() || env.GITHUB_REPOSITORY_OWNER?.trim() || env.INPUT_GITHUB_USER_NAME?.trim();
+    if (!login2 && !useSample) {
+      throw new Error(
+        "Set GITHUB_LOGIN or GITHUB_REPOSITORY_OWNER, or TETRASS_USE_SAMPLE=1 for offline mode."
+      );
+    }
+    const outputsEnv = env.TETRASS_OUTPUTS?.trim();
+    const outputs2 = outputsEnv ? parseOutputLines(outputsEnv, repoRoot) : [
+      { filePath: join2(repoRoot, "img", "tetrass.svg"), palette: "light" },
+      { filePath: join2(repoRoot, "img", "tetrass-dark.svg"), palette: "dark" }
+    ];
+    return {
+      login: login2 ?? "sample",
+      token,
+      outputs: outputs2,
+      useSample,
+      allowUnauthenticatedFallback: env.TETRASS_ALLOW_UNAUTH_FALLBACK === "1",
+      workspaceRoot: repoRoot
+    };
+  }
+  const login = env.INPUT_GITHUB_USER_NAME?.trim();
   if (!login) {
     throw new Error("INPUT_GITHUB_USER_NAME is required.");
   }
+  if (!GITHUB_LOGIN_LIKE.test(login)) {
+    throw new Error("Invalid GitHub username format.");
+  }
+  const outputsRaw = env.INPUT_OUTPUTS ?? "";
+  const workspace = env.GITHUB_WORKSPACE ?? process.cwd();
   const outputs = parseOutputLines(outputsRaw, workspace);
   if (outputs.length === 0) {
     throw new Error("INPUT_OUTPUTS must list at least one output path.");
   }
-  await runTetrassGenerate({
+  if (!useSample && !token) {
+    throw new Error(
+      "GITHUB_TOKEN is required unless using sample/offline mode (set TETRASS_USE_SAMPLE=1 or TETRASS_OFFLINE=1)."
+    );
+  }
+  return {
     login,
     token,
     outputs,
-    useSample: process.env.TETRASS_USE_SAMPLE === "1" || process.env.TETRASS_OFFLINE === "1",
+    useSample,
     workspaceRoot: workspace
-  });
+  };
+}
+
+// src/action-entry.ts
+function setFailedForGitHubActions(message) {
+  process.exitCode = 1;
+  const escaped = message.replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+  process.stdout.write(`::error::${escaped}
+`);
+}
+async function main() {
+  const opts = resolveGenerateOptions(process.env, { context: "github-action" });
+  await runTetrassGenerate(opts);
 }
 main().catch((e) => {
-  console.error(e);
-  process.exit(1);
+  const message = e instanceof Error ? e.message : "Unknown error";
+  setFailedForGitHubActions(message);
 });

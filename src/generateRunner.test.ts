@@ -1,5 +1,9 @@
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+
 import { describe, expect, it, vi } from "vitest";
-import { parseOutputLines } from "./generateRunner.js";
+import { parseOutputLines, runTetrassGenerate } from "./generateRunner.js";
 
 describe("parseOutputLines", () => {
   it("parses light and github-dark palette", () => {
@@ -53,5 +57,43 @@ describe("parseOutputLines", () => {
     expect(() => parseOutputLines("../escape.svg", "/repo")).toThrow(
       /outside workspace root/,
     );
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "rejects output path whose directory is a symlink outside workspace",
+    async () => {
+      const ws = resolve(await mkdtemp(join(tmpdir(), "tetrass-parse-")));
+      const outside = resolve(await mkdtemp(join(tmpdir(), "tetrass-ext-parse-")));
+      await mkdir(outside, { recursive: true });
+      await symlink(outside, join(ws, "img"));
+      expect(() => parseOutputLines("./img/a.svg", ws)).toThrow(
+        /outside workspace root/,
+      );
+      await rm(ws, { recursive: true, force: true });
+      await rm(outside, { recursive: true, force: true });
+    },
+  );
+});
+
+describe("runTetrassGenerate", () => {
+  it.skipIf(process.platform === "win32")("rejects an output path that is a symlink", async () => {
+    const workspace = await mkdtemp(join(tmpdir(), "tetrass-ws-"));
+    const outside = await mkdtemp(join(tmpdir(), "tetrass-ext-"));
+    const remoteFile = join(outside, "target.svg");
+    await writeFile(remoteFile, "<svg/>", "utf8");
+    const outputSymlink = join(workspace, "out.svg");
+    await symlink(remoteFile, outputSymlink);
+
+    await expect(
+      runTetrassGenerate({
+        login: "octocat",
+        useSample: true,
+        outputs: [{ filePath: outputSymlink, palette: "light" }],
+        workspaceRoot: workspace,
+      }),
+    ).rejects.toThrow(/symbolic link/i);
+
+    await rm(workspace, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   });
 });

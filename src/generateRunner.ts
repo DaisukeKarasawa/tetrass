@@ -1,16 +1,23 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, relative, resolve, sep } from "node:path";
+import { constants as fsConstants, existsSync, realpathSync } from "node:fs";
+import { lstat, mkdir, open, writeFile } from "node:fs/promises";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
+import type { Board, ReplayScript } from "./domain/types.js";
 import {
   buildSampleContributionDays,
   contributionDaysToTargetBoard,
   fetchContributionCalendar,
   flattenContributionDays,
+  type ContributionDay,
 } from "./io/contributions.js";
 import { planDeterministicReplay } from "./planner/deterministicPlanner.js";
 import { buildAnimatedSvg, PALETTE_DARK, PALETTE_LIGHT } from "./renderer/svgRenderer.js";
 import type { SvgPalette } from "./renderer/svgRenderer.js";
-import { simulateReplayForFrames, simulateReplayFast } from "./simulator/simulateReplay.js";
+import {
+  simulateReplayForFrames,
+  simulateReplayFast,
+  type SimulationResult,
+} from "./simulator/simulateReplay.js";
 import { assertFinalMatchesTarget } from "./verify/finalBoardMatcher.js";
 
 export type OutputPalette = "light" | "dark";
@@ -27,6 +34,11 @@ export interface GenerateOptions {
   outputs: OutputTarget[];
   /** Force sample data (no API). */
   useSample?: boolean;
+  /**
+   * CLI opt-in: when true and no token, use deterministic sample data if the GitHub fetch fails.
+   * The composite action must not set this; use `useSample` or pass `GITHUB_TOKEN` instead.
+   */
+  allowUnauthenticatedFallback?: boolean;
   /** Restrict outputs to this workspace root when set. */
   workspaceRoot?: string;
 }
@@ -35,31 +47,47 @@ function paletteFor(kind: OutputPalette): SvgPalette {
   return kind === "dark" ? PALETTE_DARK : PALETTE_LIGHT;
 }
 
+type FetchContributionOpts = Pick<
+  GenerateOptions,
+  "login" | "token" | "useSample" | "allowUnauthenticatedFallback"
+>;
+
 /**
- * Fetch contributions, plan deterministic replay, verify, write one SVG per output target.
+ * Load contribution calendar days: GitHub API, or deterministic sample (offline / fallback).
  */
-export async function runTetrassGenerate(opts: GenerateOptions): Promise<void> {
-  const { login, token, outputs, useSample, workspaceRoot } = opts;
-  if (outputs.length === 0) throw new Error("At least one output path is required.");
-
-  let days;
+export async function fetchOrBuildContributionDays(opts: FetchContributionOpts): Promise<ContributionDay[]> {
+  const { login, token, useSample, allowUnauthenticatedFallback = false } = opts;
   if (useSample) {
-    days = buildSampleContributionDays();
     console.warn("Using deterministic sample contributions (offline/sample mode).");
-  } else {
-    try {
-      const cal = await fetchContributionCalendar(login, token);
-      days = flattenContributionDays(cal);
-    } catch (e) {
-      if (!token) {
-        console.warn("GitHub fetch failed without token; falling back to sample contributions.", e);
-        days = buildSampleContributionDays();
-      } else {
-        throw e;
-      }
-    }
+    return buildSampleContributionDays();
   }
+  try {
+    const cal = await fetchContributionCalendar(login, token);
+    return flattenContributionDays(cal);
+  } catch (e) {
+    if (!token) {
+      if (allowUnauthenticatedFallback) {
+        console.warn(
+          "GitHub fetch failed without token; falling back to sample contributions (TETRASS_ALLOW_UNAUTH_FALLBACK=1).",
+        );
+        return buildSampleContributionDays();
+      }
+      throw new Error(
+        "GitHub fetch failed with no GITHUB_TOKEN. Set GITHUB_TOKEN for real contribution data, use TETRASS_USE_SAMPLE=1 (or TETRASS_OFFLINE=1) for offline sample mode, or set TETRASS_ALLOW_UNAUTH_FALLBACK=1 for CLI-only opt-in when an unauthenticated fetch fails.",
+      );
+    }
+    throw new Error(`GitHub API request failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
 
+export interface PlannedVerifiedReplay {
+  script: ReplayScript;
+  grassTarget: Board;
+  fast: SimulationResult;
+}
+
+/** Map days → grass mask, plan replay, fast-simulate, and run acceptance checks. */
+export function planAndVerifyReplay(days: ContributionDay[]): PlannedVerifiedReplay {
   const target = contributionDaysToTargetBoard(days);
   const { script, grassTarget } = planDeterministicReplay(target);
   const fast = simulateReplayFast(script);
@@ -70,29 +98,98 @@ export async function runTetrassGenerate(opts: GenerateOptions): Promise<void> {
   if (fast.usedTypes.size < 4) {
     throw new Error(`Acceptance failed: need >=4 piece types, got ${fast.usedTypes.size}`);
   }
+  return { script, grassTarget, fast };
+}
 
+function resolveWorkspaceRoots(workspaceRoot: string | undefined): {
+  workspaceRootResolved: string | null;
+  workspaceRootCanonical: string | null;
+} {
+  const workspaceRootResolved = workspaceRoot ? resolve(workspaceRoot) : null;
+  let workspaceRootCanonical: string | null = null;
+  if (workspaceRootResolved) {
+    try {
+      workspaceRootCanonical = realpathSync(workspaceRootResolved);
+    } catch {
+      workspaceRootCanonical = workspaceRootResolved;
+    }
+  }
+  return { workspaceRootResolved, workspaceRootCanonical };
+}
+
+export interface RenderAndWriteOpts {
+  script: ReplayScript;
+  fast: SimulationResult;
+  outputs: OutputTarget[];
+  workspaceRootResolved: string | null;
+  workspaceRootCanonical: string | null;
+}
+
+/** Expand frames, render SVG per palette (cached), write each output path. */
+export async function renderAndWriteReplayOutputs(opts: RenderAndWriteOpts): Promise<void> {
+  const { script, fast, outputs, workspaceRootResolved, workspaceRootCanonical } = opts;
   const { frames } = simulateReplayForFrames(script);
-
   const svgByPalette = new Map<OutputPalette, string>();
-  const normalizedWorkspaceRoot = workspaceRoot ? resolve(workspaceRoot) : null;
 
   for (const out of outputs) {
-    if (normalizedWorkspaceRoot) {
-      assertPathInsideRoot(out.filePath, normalizedWorkspaceRoot);
+    let filePath = out.filePath;
+    if (workspaceRootResolved && workspaceRootCanonical) {
+      assertPathInsideRoot(filePath, workspaceRootResolved);
+      const rel = relative(workspaceRootResolved, resolve(filePath));
+      if (rel === "" || rel === ".") {
+        throw new Error(`Output path '${filePath}' must be a file under workspace root '${workspaceRootResolved}'.`);
+      }
+      if (rel.startsWith("..") || rel.includes(`${sep}..${sep}`) || rel === "..") {
+        throw new Error(`Output path '${filePath}' is outside workspace root '${workspaceRootResolved}'.`);
+      }
+      filePath = join(workspaceRootCanonical, rel);
     }
     let svg = svgByPalette.get(out.palette);
     if (!svg) {
       svg = buildAnimatedSvg(frames, paletteFor(out.palette));
       svgByPalette.set(out.palette, svg);
     }
-    const dir = dirname(out.filePath);
+    const dir = dirname(filePath);
     await mkdir(dir, { recursive: true });
-    await writeFile(out.filePath, svg, "utf8");
+    let writeTarget = filePath;
+    if (workspaceRootCanonical) {
+      const realDir = realpathSync(dir);
+      assertPathInsideRoot(realDir, workspaceRootCanonical);
+      writeTarget = resolve(realDir, basename(filePath));
+      assertPathInsideRoot(writeTarget, workspaceRootCanonical);
+      await writeUtf8FileRejectSymlinkTarget(writeTarget, svg);
+    } else {
+      await writeFile(writeTarget, svg, "utf8");
+    }
   }
 
   console.log(
     `Wrote ${outputs.length} file(s) (${frames.length} frames, ${script.steps.length} locks, ${fast.totalLineClears} line clears).`,
   );
+}
+
+/**
+ * Fetch contributions, plan deterministic replay, verify, write one SVG per output target.
+ */
+export async function runTetrassGenerate(opts: GenerateOptions): Promise<void> {
+  const { login, token, outputs, useSample, workspaceRoot, allowUnauthenticatedFallback } = opts;
+  if (outputs.length === 0) throw new Error("At least one output path is required.");
+
+  const days = await fetchOrBuildContributionDays({
+    login,
+    token,
+    useSample,
+    allowUnauthenticatedFallback,
+  });
+  const { script, fast } = planAndVerifyReplay(days);
+  const { workspaceRootResolved, workspaceRootCanonical } = resolveWorkspaceRoots(workspaceRoot);
+  await renderAndWriteReplayOutputs({
+    script,
+    fast,
+    outputs,
+    workspaceRootResolved,
+    workspaceRootCanonical,
+  });
 }
 
 /** Resolve a path from the GitHub Actions `outputs` multiline string (snk-style). */
@@ -125,7 +222,8 @@ export function parseOutputLines(raw: string, workspaceRoot: string): OutputTarg
     }
     const abs = resolve(workspaceRoot, filePart);
     assertPathInsideRoot(abs, normalizedRoot);
-    result.push({ filePath: abs, palette });
+    const filePath = canonicalizeOutputPathUnderWorkspace(abs, normalizedRoot);
+    result.push({ filePath, palette });
   }
   return result;
 }
@@ -135,5 +233,83 @@ function assertPathInsideRoot(filePath: string, root: string): void {
   if (rel === "") return;
   if (rel.startsWith("..") || rel.includes(`${sep}..${sep}`) || rel === "..") {
     throw new Error(`Output path '${filePath}' is outside workspace root '${root}'.`);
+  }
+}
+
+function canonicalWorkspaceRootDir(workspaceResolved: string): string {
+  try {
+    return realpathSync(workspaceResolved);
+  } catch {
+    return workspaceResolved;
+  }
+}
+
+/**
+ * Resolve symlinks on existing path prefixes so a lexically in-repo path cannot escape via e.g. `img -> /tmp`.
+ * Tail segments that do not exist yet are appended under the last resolved directory.
+ */
+function canonicalizeOutputPathUnderWorkspace(lexicalAbs: string, workspaceResolved: string): string {
+  const rootCanon = canonicalWorkspaceRootDir(workspaceResolved);
+  const rel = relative(workspaceResolved, lexicalAbs);
+  if (rel === "" || rel === ".") {
+    throw new Error(
+      `Output path '${lexicalAbs}' must be a file under workspace root '${workspaceResolved}'.`,
+    );
+  }
+  const parts = rel.split(sep).filter((p) => p.length > 0);
+  let cur = rootCanon;
+  for (let i = 0; i < parts.length; i++) {
+    const step = join(cur, parts[i]);
+    if (existsSync(step)) {
+      cur = realpathSync(step);
+      assertPathInsideRoot(cur, rootCanon);
+    } else {
+      cur = join(cur, ...parts.slice(i));
+      break;
+    }
+  }
+  assertPathInsideRoot(cur, rootCanon);
+  return cur;
+}
+
+function isErrnoCode(e: unknown, code: string): boolean {
+  return typeof e === "object" && e !== null && "code" in e && (e as NodeJS.ErrnoException).code === code;
+}
+
+/**
+ * Write UTF-8 text without following a symlink at the final path component (Unix: O_NOFOLLOW).
+ * Mitigates escape via pre-existing symlink at the output path after directory checks.
+ */
+async function writeUtf8FileRejectSymlinkTarget(filePath: string, data: string): Promise<void> {
+  const baseFlags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC;
+  const flags =
+    fsConstants.O_NOFOLLOW !== undefined ? baseFlags | fsConstants.O_NOFOLLOW : baseFlags;
+
+  if (fsConstants.O_NOFOLLOW === undefined) {
+    try {
+      const st = await lstat(filePath);
+      if (st.isSymbolicLink()) {
+        throw new Error(`Refusing to write through symbolic link: '${filePath}'`);
+      }
+    } catch (e) {
+      if (!isErrnoCode(e, "ENOENT")) throw e;
+    }
+    await writeFile(filePath, data, "utf8");
+    return;
+  }
+
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(filePath, flags, 0o644);
+  } catch (e) {
+    if (isErrnoCode(e, "ELOOP")) {
+      throw new Error(`Refusing to open symbolic link as output: '${filePath}'`);
+    }
+    throw e;
+  }
+  try {
+    await handle.writeFile(data, "utf8");
+  } finally {
+    await handle.close();
   }
 }
