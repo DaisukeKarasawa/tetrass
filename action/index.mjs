@@ -82,11 +82,18 @@ function contributionDaysToTargetBoard(days) {
 function buildSampleContributionDays() {
   const days = [];
   const start = /* @__PURE__ */ new Date("2024-01-01T00:00:00Z");
+  const tailStart = SAMPLE_CONTRIBUTION_DAY_COUNT - CELLS;
   for (let i = 0; i < SAMPLE_CONTRIBUTION_DAY_COUNT; i++) {
     const d = new Date(start);
     d.setUTCDate(start.getUTCDate() + i);
     const date = d.toISOString().slice(0, 10);
-    const contributionCount = (i * 17 + i % 5) % 11 > 3 ? 1 : 0;
+    let contributionCount = 0;
+    if (i >= tailStart) {
+      const idxInSlice = i - tailStart;
+      if (idxInSlice === 0 || idxInSlice === 1 || idxInSlice === 10 || idxInSlice === 11) {
+        contributionCount = 1;
+      }
+    }
     days.push({ date, contributionCount });
   }
   return days;
@@ -497,9 +504,16 @@ function tileTargetWithTrimming(target, minDistinctTypes) {
   let trimmed = cloneBoard(target);
   let trimmedCells = 0;
   const maxGrass = BOARD_WIDTH * BOARD_HEIGHT;
+  const initialGrassCells = grassCells(target).length;
   for (let attempt = 0; attempt <= maxGrass; attempt++) {
     const steps = tryTile(trimmed, minDistinctTypes);
     if (steps) {
+      const remainingGrass = grassCells(trimmed).length;
+      if (initialGrassCells > 0 && remainingGrass === 0) {
+        throw new Error(
+          "Cannot tile the contribution mask without discarding all grass cells. The playfield may be too dense or irregular to pack with tetrominoes; try a sparser contribution grid."
+        );
+      }
       return { steps, trimmedBoard: trimmed, trimmedCells };
     }
     const cells = grassCells(trimmed);

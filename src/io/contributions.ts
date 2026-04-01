@@ -107,11 +107,20 @@ export function contributionDaysToTargetBoard(days: ContributionDay[]): Board {
 export function buildSampleContributionDays(): ContributionDay[] {
   const days: ContributionDay[] = [];
   const start = new Date("2024-01-01T00:00:00Z");
+  /** Last `CELLS` days map into the playfield; earlier days are ignored by `contributionDaysToTargetBoard`. */
+  const tailStart = SAMPLE_CONTRIBUTION_DAY_COUNT - CELLS;
   for (let i = 0; i < SAMPLE_CONTRIBUTION_DAY_COUNT; i++) {
     const d = new Date(start);
     d.setUTCDate(start.getUTCDate() + i);
     const date = d.toISOString().slice(0, 10);
-    const contributionCount = (i * 17 + (i % 5)) % 11 > 3 ? 1 : 0;
+    let contributionCount = 0;
+    if (i >= tailStart) {
+      const idxInSlice = i - tailStart;
+      // Bottom-left O-tetromino on the board: slice indices 0,1,10,11 -> (0,19),(1,19),(0,18),(1,18).
+      if (idxInSlice === 0 || idxInSlice === 1 || idxInSlice === 10 || idxInSlice === 11) {
+        contributionCount = 1;
+      }
+    }
     days.push({ date, contributionCount });
   }
   return days;

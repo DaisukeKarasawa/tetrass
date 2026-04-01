@@ -45,4 +45,9 @@ describe("tileTargetWithTrimming", () => {
     expect(replay.finalBoard).toEqual(trimmedBoard);
     expect(trimmedBoard).not.toEqual(twoFullRows);
   });
+
+  it("rejects solutions that discard every grass cell when the input had contributions", () => {
+    const target = boardFromCoords([[0, 0]]);
+    expect(() => tileTargetWithTrimming(target, 0)).toThrow(/discarding all grass cells/i);
+  });
 });

@@ -211,10 +211,17 @@ export function tileTargetWithTrimming(
   let trimmed = cloneBoard(target);
   let trimmedCells = 0;
   const maxGrass = BOARD_WIDTH * BOARD_HEIGHT;
+  const initialGrassCells = grassCells(target).length;
 
   for (let attempt = 0; attempt <= maxGrass; attempt++) {
     const steps = tryTile(trimmed, minDistinctTypes);
     if (steps) {
+      const remainingGrass = grassCells(trimmed).length;
+      if (initialGrassCells > 0 && remainingGrass === 0) {
+        throw new Error(
+          "Cannot tile the contribution mask without discarding all grass cells. The playfield may be too dense or irregular to pack with tetrominoes; try a sparser contribution grid.",
+        );
+      }
       return { steps, trimmedBoard: trimmed, trimmedCells };
     }
     const cells = grassCells(trimmed);

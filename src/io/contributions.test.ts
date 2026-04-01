@@ -4,6 +4,7 @@ import { BOARD_HEIGHT, BOARD_WIDTH } from "../domain/types.js";
 import {
   type ContributionCalendar,
   type ContributionDay,
+  buildSampleContributionDays,
   contributionDaysToTargetBoard,
   fetchContributionCalendar,
   flattenContributionDays,
@@ -53,6 +54,19 @@ describe("contributionDaysToTargetBoard", () => {
     }));
     const board = contributionDaysToTargetBoard(days);
     expect(board.every((row) => row.every((c) => c === 1))).toBe(true);
+  });
+
+  it("maps sample days to a small tileable O-shaped grass cluster at the bottom-left", () => {
+    const board = contributionDaysToTargetBoard(buildSampleContributionDays());
+    expect(board[19][0]).toBe(1);
+    expect(board[19][1]).toBe(1);
+    expect(board[18][0]).toBe(1);
+    expect(board[18][1]).toBe(1);
+    let ones = 0;
+    for (let y = 0; y < BOARD_HEIGHT; y++) {
+      for (let x = 0; x < BOARD_WIDTH; x++) if (board[y][x]) ones++;
+    }
+    expect(ones).toBe(4);
   });
 });
 

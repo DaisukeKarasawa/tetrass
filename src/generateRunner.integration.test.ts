@@ -16,8 +16,8 @@ vi.mock("./io/contributions.js", async (importOriginal) => {
   };
 });
 
-import { fetchContributionCalendar } from "./io/contributions.js";
-import { runTetrassGenerate } from "./generateRunner.js";
+import { buildSampleContributionDays, fetchContributionCalendar } from "./io/contributions.js";
+import { planAndVerifyReplay, runTetrassGenerate } from "./generateRunner.js";
 
 describe("runTetrassGenerate (integration)", () => {
   beforeEach(() => {
@@ -40,6 +40,7 @@ describe("runTetrassGenerate (integration)", () => {
     const text = await readFile(out, "utf8");
     expect(text).toContain("<svg");
     expect(text).toContain("Tetrass");
+    expect(text).toContain('href="#cG"');
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -56,6 +57,16 @@ describe("runTetrassGenerate (integration)", () => {
     expect(fetchContributionCalendar).toHaveBeenCalledWith("octocat", "fake-token");
     const text = await readFile(out, "utf8");
     expect(text).toContain("<svg");
+    expect(text).toContain('href="#cG"');
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it("keeps a non-empty grass target for sample contribution data", () => {
+    const { grassTarget } = planAndVerifyReplay(buildSampleContributionDays());
+    let grass = 0;
+    for (const row of grassTarget) {
+      for (const c of row) if (c) grass++;
+    }
+    expect(grass).toBeGreaterThan(0);
   });
 });
