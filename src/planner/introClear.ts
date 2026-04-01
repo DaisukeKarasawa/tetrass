@@ -15,7 +15,7 @@ export function planScriptedDoubleClearIntro(): ReplayStep[] {
 
 export function assertIntroValid(intro: ReplayStep[]): void {
   const r = simulateReplayFast({ steps: intro });
-  if (r.totalLineClears < 1) throw new Error("Intro must perform at least one line clear.");
+  if (r.totalLineClears !== 2) throw new Error("Intro must clear exactly two lines.");
   const empty = r.finalBoard.every((row) => row.every((c) => c === 0));
   if (!empty) throw new Error("Intro must end on an empty board.");
 }

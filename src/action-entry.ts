@@ -20,6 +20,7 @@ async function main(): Promise<void> {
     token,
     outputs,
     useSample: process.env.TETRASS_USE_SAMPLE === "1" || process.env.TETRASS_OFFLINE === "1",
+    workspaceRoot: workspace,
   });
 }
 

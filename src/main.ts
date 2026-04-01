@@ -36,6 +36,7 @@ async function generateCli(): Promise<void> {
     token,
     outputs,
     useSample,
+    workspaceRoot: ROOT,
   });
 }
 

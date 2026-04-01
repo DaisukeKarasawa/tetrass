@@ -16,7 +16,7 @@ const EMBEDDED_PAD: ReplayStep[] = [
 ];
 
 export function planDiversityPadAfterIntro(): ReplayStep[] {
-  return EMBEDDED_PAD;
+  return EMBEDDED_PAD.map((step) => ({ placement: { ...step.placement } }));
 }
 
 export function assertDiversityPadValid(pad: ReplayStep[]): void {

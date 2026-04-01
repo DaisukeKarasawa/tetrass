@@ -1,5 +1,7 @@
+import { applyPlacement, createEmptyBoard } from "../domain/board.js";
 import { getCells } from "../domain/tetromino.js";
 import { iterateTypesInOrder, ROTATIONS } from "../domain/tetromino.js";
+import { isValidLock } from "../simulator/simulateReplay.js";
 import {
   BOARD_HEIGHT,
   BOARD_WIDTH,
@@ -11,8 +13,14 @@ import {
 
 const TYPE_ORDER = iterateTypesInOrder();
 
-/** All normalized placements: anchor at (0,0) min corner; list of [dx,dy] within bounding box. */
-function normalizedShapeCells(type: TetrominoType, rotation: 0 | 1 | 2 | 3): [number, number][] {
+interface NormalizedShape {
+  cells: [number, number][];
+  minX: number;
+  minY: number;
+}
+
+/** Normalized shape cells plus offset from raw origin to min-corner origin. */
+function normalizedShape(type: TetrominoType, rotation: 0 | 1 | 2 | 3): NormalizedShape {
   const raw = getCells(type, rotation, 0, 0);
   let minX = Infinity;
   let minY = Infinity;
@@ -20,7 +28,11 @@ function normalizedShapeCells(type: TetrominoType, rotation: 0 | 1 | 2 | 3): [nu
     minX = Math.min(minX, x);
     minY = Math.min(minY, y);
   }
-  return raw.map(([x, y]) => [x - minX, y - minY] as [number, number]);
+  return {
+    cells: raw.map(([x, y]) => [x - minX, y - minY] as [number, number]),
+    minX,
+    minY,
+  };
 }
 
 export interface TilingResult {
@@ -49,7 +61,7 @@ function buildOptionsForTarget(target: Board): Map<string, PiecePlacement[]> {
 
   for (const type of TYPE_ORDER) {
     for (const rotation of ROTATIONS) {
-      const rel = normalizedShapeCells(type, rotation);
+      const { cells: rel, minX, minY } = normalizedShape(type, rotation);
       for (let ax = 0; ax < BOARD_WIDTH; ax++) {
         for (let ay = -4; ay < BOARD_HEIGHT; ay++) {
           const abs: [number, number][] = rel.map(([dx, dy]) => [ax + dx, ay + dy] as [number, number]);
@@ -65,7 +77,8 @@ function buildOptionsForTarget(target: Board): Map<string, PiecePlacement[]> {
             }
           }
           if (!ok) continue;
-          const p: PiecePlacement = { type, rotation, x: ax, y: ay };
+          // Keep placement origin aligned with normalized cells.
+          const p: PiecePlacement = { type, rotation, x: ax - minX, y: ay - minY };
           for (const [cx, cy] of abs) {
             const k = `${cx},${cy}`;
             const arr = options.get(k) ?? [];
@@ -149,7 +162,25 @@ function tryTile(target: Board, minDistinctTypes: number): ReplayStep[] | null {
   }
 
   if (!dfs()) return null;
-  return usedPlacements.map((placement) => ({ placement }));
+
+  // Exact cover search may produce a non-lockable order. Reorder bottom-up and
+  // verify each lock against evolving board state.
+  const ordered = [...usedPlacements].sort((a, b) => {
+    if (a.y !== b.y) return b.y - a.y;
+    if (a.x !== b.x) return a.x - b.x;
+    const ai = TYPE_ORDER.indexOf(a.type);
+    const bi = TYPE_ORDER.indexOf(b.type);
+    if (ai !== bi) return ai - bi;
+    return a.rotation - b.rotation;
+  });
+
+  const board = createEmptyBoard();
+  for (const p of ordered) {
+    if (!isValidLock(board, p)) return null;
+    applyPlacement(board, p);
+  }
+
+  return ordered.map((placement) => ({ placement }));
 }
 
 /**

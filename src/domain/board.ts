@@ -61,6 +61,9 @@ export function countFilled(board: Board): number {
 export function applyPlacement(board: Board, p: PiecePlacement): { linesCleared: number } {
   const cells = getCells(p.type, p.rotation, p.x, p.y);
   for (const [cx, cy] of cells) {
+    if (cx < 0 || cx >= BOARD_WIDTH || cy < 0 || cy >= BOARD_HEIGHT) {
+      throw new Error(`Invalid placement out of bounds: (${cx}, ${cy})`);
+    }
     board[cy][cx] = 1;
   }
   return { linesCleared: clearFullRows(board) };
