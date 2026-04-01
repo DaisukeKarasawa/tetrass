@@ -63,7 +63,7 @@ Use your default branch name in place of `main` if it differs.
 
 ## How it works
 
-1. Fetches the contribution calendar from the GitHub GraphQL API (or uses a deterministic sample when unauthenticated fetch fails or `TETRASS_USE_SAMPLE=1` is set in custom runs).
+1. Fetches the contribution calendar from the GitHub GraphQL API. The composite action uses `GITHUB_TOKEN` (`github.token`) and fails fast if it is missing unless you enable sample/offline mode. Locally, provide `GITHUB_TOKEN` for real data, set `TETRASS_USE_SAMPLE=1` (or `TETRASS_OFFLINE=1`) for offline sample data, or set `TETRASS_ALLOW_UNAUTH_FALLBACK=1` (CLI only) to allow a sample fallback when an unauthenticated fetch fails.
 2. Maps the last 200 days into a 10×20 playfield (bottom row left-to-right, then upward).
 3. Builds a fixed replay: scripted line clears + a precomputed diversity segment + exact tetromino tiling of the grass mask (trimming single cells from the top if the mask is not tileable by tetrominoes).
 4. Writes the SVG files you listed under `outputs`.
@@ -73,7 +73,7 @@ Use your default branch name in place of `main` if it differs.
 ```bash
 npm ci
 npm run build
-export GITHUB_TOKEN=ghp_...   # optional but recommended (higher API limits)
+export GITHUB_TOKEN=ghp_...   # required for real contribution data (recommended in CI)
 export GITHUB_LOGIN=yourname  # or GITHUB_REPOSITORY_OWNER
 npm run generate:tetrass
 ```
@@ -91,6 +91,8 @@ Offline / CI without API:
 ```bash
 TETRASS_USE_SAMPLE=1 npm run generate:tetrass
 ```
+
+CLI-only: if you intentionally run without `GITHUB_TOKEN` and want a deterministic sample when the public GraphQL request fails, set `TETRASS_ALLOW_UNAUTH_FALLBACK=1` (not recommended for workflows that should reflect real contributions).
 
 ## CodeRabbit review operations (for this repo)
 
