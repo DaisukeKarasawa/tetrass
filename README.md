@@ -23,7 +23,7 @@ jobs:
   update:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: DaisukeKarasawa/tetrass/action@main
         with:
@@ -32,7 +32,7 @@ jobs:
             img/tetrass.svg
             img/tetrass-dark.svg?palette=github-dark
 
-      - uses: stefanzweifel/git-auto-commit-action@v5
+      - uses: stefanzweifel/git-auto-commit-action@v7
         with:
           commit_message: "chore: update Tetrass SVG"
           file_pattern: "img/*.svg"
