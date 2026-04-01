@@ -822,15 +822,26 @@ async function renderAndWriteReplayOutputs(opts) {
       svgByPalette.set(out.palette, svg);
     }
     const dir = dirname(filePath);
-    await mkdir(dir, { recursive: true });
     let writeTarget = filePath;
     if (workspaceRootCanonical) {
-      const realDir = realpathSync(dir);
-      assertPathInsideRoot(realDir, workspaceRootCanonical);
-      writeTarget = resolve(realDir, basename(filePath));
+      const dirParts = relative(workspaceRootCanonical, resolve(dir)).split(sep).filter((p) => p.length > 0);
+      let validatedDir = workspaceRootCanonical;
+      for (const part of dirParts) {
+        const next = join(validatedDir, part);
+        if (existsSync(next)) {
+          validatedDir = realpathSync(next);
+          assertPathInsideRoot(validatedDir, workspaceRootCanonical);
+        } else {
+          await mkdir(next, { recursive: true });
+          validatedDir = realpathSync(next);
+          assertPathInsideRoot(validatedDir, workspaceRootCanonical);
+        }
+      }
+      writeTarget = resolve(validatedDir, basename(filePath));
       assertPathInsideRoot(writeTarget, workspaceRootCanonical);
       await writeUtf8FileRejectSymlinkTarget(writeTarget, svg);
     } else {
+      await mkdir(dir, { recursive: true });
       await writeFile(writeTarget, svg, "utf8");
     }
   }
@@ -853,6 +864,13 @@ async function runTetrassGenerate(opts) {
     ...o,
     filePath: canonicalizeOutputPathUnderWorkspace(resolve(o.filePath), workspaceRootResolved)
   })) : outputs;
+  const seenOutputPaths = /* @__PURE__ */ new Set();
+  for (const { filePath } of outputsForRender) {
+    if (seenOutputPaths.has(filePath)) {
+      throw new Error(`Duplicate output path resolved to '${filePath}'.`);
+    }
+    seenOutputPaths.add(filePath);
+  }
   await renderAndWriteReplayOutputs({
     script,
     fast,
