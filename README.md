@@ -92,6 +92,41 @@ Offline / CI without API:
 TETRASS_USE_SAMPLE=1 npm run generate:tetrass
 ```
 
+## CodeRabbit review operations (for this repo)
+
+This repository includes a Tetrass-specific CodeRabbit setup in [`.coderabbit.yaml`](.coderabbit.yaml)
+focused on:
+- Action contract integrity (`action/action.yml` <-> parser <-> workflow <-> README)
+- Deterministic invariants (final board match, line clear, piece diversity)
+- Noise reduction (generated SVG/bundle/dependency trees)
+
+Recommended local loop:
+
+```bash
+mkdir -p .coderabbit
+coderabbit --prompt-only -t uncommitted 2>&1 | tee .coderabbit/last-prompt-only.txt
+```
+
+Triage policy:
+- Blocking: contract breaks, path traversal risk, invariant regressions, secret leaks
+- Should-fix: docs/workflow drift, weak failure behavior
+- Nit/style: defer unless explicitly promoted
+
+Suggested pass limit: **2-3 loops max**. If the same finding repeats, refine policy text in
+`.coderabbit.yaml` instead of continuing the loop.
+
+### Warning to error escalation policy
+
+Pre-merge checks start in `warning` mode to minimize rollout friction. Promote a specific check
+to `error` only when all conditions are satisfied:
+
+1. The check has produced stable, actionable results across recent PRs (no frequent false positives).
+2. The team agrees the check should block merges.
+3. The remediation path is clear and documented in README and/or code comments.
+
+Current governance setting:
+- `reviews.pre_merge_checks.override_requested_reviewers_only: true`
+
 ## Releasing the action
 
 The composite action lives in [`action/action.yml`](action/action.yml) and runs [`action/index.mjs`](action/index.mjs), which is produced by `npm run build` (esbuild bundle). **Commit updated `action/index.mjs` whenever TypeScript sources under `src/` change**, so consumers pinning a tag always get a working bundle without building.
