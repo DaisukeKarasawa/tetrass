@@ -1,0 +1,29 @@
+name: Tetrass
+description: Generate deterministic Tetris-style GitHub contribution SVGs (README-friendly, snk-style outputs).
+branding:
+  icon: grid
+  color: green
+
+inputs:
+  github_user_name:
+    description: GitHub login whose public contribution calendar is used (same idea as Platane/snk).
+    required: true
+  outputs:
+    description: |
+      Multiline list of SVG paths to write, relative to the repository root (checked out in the workflow).
+      Optional query: append ?palette=github-dark for the dark theme (matches snk naming).
+      Example:
+        ./img/tetrass.svg
+        ./img/tetrass-dark.svg?palette=github-dark
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Generate SVGs
+      shell: bash
+      run: node "${GITHUB_ACTION_PATH}/index.mjs"
+      env:
+        INPUT_GITHUB_USER_NAME: ${{ inputs.github_user_name }}
+        INPUT_OUTPUTS: ${{ inputs.outputs }}
+        GITHUB_TOKEN: ${{ github.token }}

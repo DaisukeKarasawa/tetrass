@@ -4,12 +4,14 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && npm run build:action",
+    "build:action": "esbuild src/action-entry.ts --bundle --platform=node --format=esm --outfile=action/index.mjs",
     "generate:tetrass": "node dist/main.js generate",
     "test": "vitest run"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "esbuild": "^0.24.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   }

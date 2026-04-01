@@ -2,12 +2,50 @@
 
 Deterministic (no randomness) Tetris-style animation for GitHub contribution “grass”, rendered as SVG for your profile README.
 
-## How it works
+## Use from your profile repository (recommended, snk-style)
 
-1. Fetches your contribution calendar from the GitHub GraphQL API (or uses a deterministic sample when `TETRASS_USE_SAMPLE=1`).
-2. Maps the last 200 days into a 10×20 playfield (bottom row left-to-right, then upward).
-3. Builds a fixed replay: scripted line clears + a precomputed diversity segment + exact tetromino tiling of the grass mask (trimming single cells from the top if the mask is not tileable by tetrominoes).
-4. Writes `img/tetrass.svg` and `img/tetrass-dark.svg`.
+Add a workflow that calls this repo’s **composite action** (same idea as [Platane/snk](https://github.com/Platane/snk)): one step generates SVGs; another commits them.
+
+Replace `DaisukeKarasawa/tetrass` and `@main` with this repository and the branch or tag you want to pin.
+
+```yaml
+name: Generate Tetrass
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DaisukeKarasawa/tetrass/action@main
+        with:
+          github_user_name: ${{ github.repository_owner }}
+          outputs: |
+            img/tetrass.svg
+            img/tetrass-dark.svg?palette=github-dark
+
+      - uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update Tetrass SVG"
+          file_pattern: "img/*.svg"
+```
+
+**Inputs**
+
+| Input | Required | Description |
+|--------|----------|-------------|
+| `github_user_name` | yes | Login whose **public** contribution calendar is fetched (GraphQL). |
+| `outputs` | yes | Multiline paths relative to the repo root. Append `?palette=github-dark` for the dark theme (snk-compatible naming). |
+
+The action runs `node` on a bundled script; it does **not** require `npm ci` in the consumer workflow.
 
 ## README embed
 
@@ -23,7 +61,14 @@ Replace `YOUR_USER` and `YOUR_REPO` with your GitHub username and profile repo n
 
 Use your default branch name in place of `main` if it differs.
 
-## Local generation
+## How it works
+
+1. Fetches the contribution calendar from the GitHub GraphQL API (or uses a deterministic sample when unauthenticated fetch fails or `TETRASS_USE_SAMPLE=1` is set in custom runs).
+2. Maps the last 200 days into a 10×20 playfield (bottom row left-to-right, then upward).
+3. Builds a fixed replay: scripted line clears + a precomputed diversity segment + exact tetromino tiling of the grass mask (trimming single cells from the top if the mask is not tileable by tetrominoes).
+4. Writes the SVG files you listed under `outputs`.
+
+## Local generation (this repo / development)
 
 ```bash
 npm ci
@@ -33,12 +78,24 @@ export GITHUB_LOGIN=yourname  # or GITHUB_REPOSITORY_OWNER
 npm run generate:tetrass
 ```
 
+Default output paths are `img/tetrass.svg` and `img/tetrass-dark.svg`. Override with `TETRASS_OUTPUTS` (same multiline format as the action):
+
+```bash
+export TETRASS_OUTPUTS="./out/a.svg
+./out/b.svg?palette=github-dark"
+npm run generate:tetrass
+```
+
 Offline / CI without API:
 
 ```bash
 TETRASS_USE_SAMPLE=1 npm run generate:tetrass
 ```
 
-## Automated updates
+## Releasing the action
 
-See [`.github/workflows/generate-tetrass.yml`](.github/workflows/generate-tetrass.yml): scheduled and manual workflow that runs `npm ci`, `npm run build`, `npm run generate:tetrass`, and commits updated SVGs.
+The composite action lives in [`action/action.yml`](action/action.yml) and runs [`action/index.mjs`](action/index.mjs), which is produced by `npm run build` (esbuild bundle). **Commit updated `action/index.mjs` whenever TypeScript sources under `src/` change**, so consumers pinning a tag always get a working bundle without building.
+
+## Automated updates in this repository
+
+See [`.github/workflows/generate-tetrass.yml`](.github/workflows/generate-tetrass.yml): verifies `npm run build`, runs `uses: ./action`, and commits updated `img/*.svg`.

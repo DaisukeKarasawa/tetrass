@@ -14,20 +14,21 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Verify build (TypeScript + action bundle)
+        uses: actions/setup-node@v4
         with:
           node-version: "22"
           cache: npm
-
       - run: npm ci
-
       - run: npm run build
 
       - name: Generate SVGs
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPOSITORY_OWNER: ${{ github.repository_owner }}
-        run: npm run generate:tetrass
+        uses: ./action
+        with:
+          github_user_name: ${{ github.repository_owner }}
+          outputs: |
+            img/tetrass.svg
+            img/tetrass-dark.svg?palette=github-dark
 
       - uses: stefanzweifel/git-auto-commit-action@v5
         with:
