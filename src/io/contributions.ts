@@ -10,6 +10,13 @@ export interface ContributionCalendar {
   weeks: { contributionDays: ContributionDay[] }[];
 }
 
+const MAX_HTTP_ERROR_BODY_CHARS = 500;
+
+function truncateForErrorLog(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}…`;
+}
+
 const GRAPHQL = `
 query($login: String!) {
   user(login: $login) {
@@ -43,7 +50,9 @@ export async function fetchContributionCalendar(
     body: JSON.stringify({ query: GRAPHQL, variables: { login } }),
   });
   if (!res.ok) {
-    throw new Error(`GitHub GraphQL HTTP ${res.status}: ${await res.text()}`);
+    const raw = await res.text();
+    const snippet = truncateForErrorLog(raw, MAX_HTTP_ERROR_BODY_CHARS);
+    throw new Error(`GitHub GraphQL HTTP ${res.status}: ${snippet}`);
   }
   const body = (await res.json()) as {
     data?: { user?: { contributionsCollection?: { contributionCalendar: ContributionCalendar } } };
@@ -67,6 +76,9 @@ export function flattenContributionDays(cal: ContributionCalendar): Contribution
 }
 
 const CELLS = BOARD_WIDTH * BOARD_HEIGHT;
+
+/** Length of the deterministic offline contribution calendar (>= playfield cell count). */
+const SAMPLE_CONTRIBUTION_DAY_COUNT = 400;
 
 /**
  * Map the last N contribution days into the playfield: bottom row left-to-right, then upward.
@@ -95,7 +107,7 @@ export function contributionDaysToTargetBoard(days: ContributionDay[]): Board {
 export function buildSampleContributionDays(): ContributionDay[] {
   const days: ContributionDay[] = [];
   const start = new Date("2024-01-01T00:00:00Z");
-  for (let i = 0; i < 400; i++) {
+  for (let i = 0; i < SAMPLE_CONTRIBUTION_DAY_COUNT; i++) {
     const d = new Date(start);
     d.setUTCDate(start.getUTCDate() + i);
     const date = d.toISOString().slice(0, 10);

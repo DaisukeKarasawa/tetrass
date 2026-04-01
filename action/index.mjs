@@ -7,6 +7,11 @@ var BOARD_WIDTH = 10;
 var BOARD_HEIGHT = 20;
 
 // src/io/contributions.ts
+var MAX_HTTP_ERROR_BODY_CHARS = 500;
+function truncateForErrorLog(text, maxChars) {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\u2026`;
+}
 var GRAPHQL = `
 query($login: String!) {
   user(login: $login) {
@@ -35,7 +40,9 @@ async function fetchContributionCalendar(login, token) {
     body: JSON.stringify({ query: GRAPHQL, variables: { login } })
   });
   if (!res.ok) {
-    throw new Error(`GitHub GraphQL HTTP ${res.status}: ${await res.text()}`);
+    const raw = await res.text();
+    const snippet = truncateForErrorLog(raw, MAX_HTTP_ERROR_BODY_CHARS);
+    throw new Error(`GitHub GraphQL HTTP ${res.status}: ${snippet}`);
   }
   const body = await res.json();
   if (body.errors?.length) {
@@ -53,6 +60,7 @@ function flattenContributionDays(cal) {
   return days;
 }
 var CELLS = BOARD_WIDTH * BOARD_HEIGHT;
+var SAMPLE_CONTRIBUTION_DAY_COUNT = 400;
 function contributionDaysToTargetBoard(days) {
   const values = days.map((d) => d.contributionCount > 0 ? 1 : 0);
   const need = CELLS;
@@ -73,7 +81,7 @@ function contributionDaysToTargetBoard(days) {
 function buildSampleContributionDays() {
   const days = [];
   const start = /* @__PURE__ */ new Date("2024-01-01T00:00:00Z");
-  for (let i = 0; i < 400; i++) {
+  for (let i = 0; i < SAMPLE_CONTRIBUTION_DAY_COUNT; i++) {
     const d = new Date(start);
     d.setUTCDate(start.getUTCDate() + i);
     const date = d.toISOString().slice(0, 10);
