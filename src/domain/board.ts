@@ -58,6 +58,33 @@ export function countFilled(board: Board): number {
   return n;
 }
 
+function lockCellsOverlapStack(board: Board, cells: [number, number][]): { ok: boolean; reason?: string } {
+  for (const [cx, cy] of cells) {
+    if (cx < 0 || cx >= BOARD_WIDTH || cy < 0 || cy >= BOARD_HEIGHT) {
+      return { ok: false, reason: "out_of_bounds" };
+    }
+    if (board[cy][cx] === 1) return { ok: false, reason: "overlap" };
+  }
+  return { ok: true };
+}
+
+function pieceCanMoveDownOnBoard(board: Board, p: PiecePlacement): boolean {
+  const cells = getCells(p.type, p.rotation, p.x, p.y + 1);
+  for (const [cx, cy] of cells) {
+    if (cy >= BOARD_HEIGHT) return false;
+    if (cy < 0) continue;
+    if (board[cy][cx] === 1) return false;
+  }
+  return true;
+}
+
+/** Valid lock: in bounds, no overlap with stack, cannot move down (standard Tetris lock rule). */
+export function isValidLock(board: Board, p: PiecePlacement): boolean {
+  const cells = getCells(p.type, p.rotation, p.x, p.y);
+  if (!lockCellsOverlapStack(board, cells).ok) return false;
+  return !pieceCanMoveDownOnBoard(board, p);
+}
+
 export function applyPlacement(board: Board, p: PiecePlacement): { linesCleared: number } {
   const cells = getCells(p.type, p.rotation, p.x, p.y);
   for (const [cx, cy] of cells) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyPlacement, clearFullRows, createEmptyBoard } from "./board.js";
+import { applyPlacement, clearFullRows, createEmptyBoard, isValidLock } from "./board.js";
 import type { PiecePlacement } from "./types.js";
 import { BOARD_HEIGHT, BOARD_WIDTH } from "./types.js";
 
@@ -12,6 +12,21 @@ describe("clearFullRows", () => {
     expect(n).toBe(1);
     expect(b[BOARD_HEIGHT - 1][0]).toBe(1);
     for (let x = 1; x < BOARD_WIDTH; x++) expect(b[BOARD_HEIGHT - 1][x]).toBe(0);
+  });
+});
+
+describe("isValidLock", () => {
+  it("accepts horizontal I resting on a single block (standard lock: cannot move down)", () => {
+    const board = createEmptyBoard();
+    board[2][2] = 1;
+    const p: PiecePlacement = { type: "I", rotation: 0, x: 0, y: 0 };
+    expect(isValidLock(board, p)).toBe(true);
+  });
+
+  it("rejects when the piece can still move down", () => {
+    const board = createEmptyBoard();
+    const p: PiecePlacement = { type: "I", rotation: 0, x: 0, y: 0 };
+    expect(isValidLock(board, p)).toBe(false);
   });
 });
 

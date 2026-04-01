@@ -1,7 +1,12 @@
-import { applyPlacement, createEmptyBoard } from "../domain/board.js";
+import {
+  applyPlacement,
+  boardsEqual,
+  cloneBoard,
+  createEmptyBoard,
+  isValidLock,
+} from "../domain/board.js";
 import { getCells } from "../domain/tetromino.js";
 import { iterateTypesInOrder, ROTATIONS } from "../domain/tetromino.js";
-import { isValidLock } from "../simulator/simulateReplay.js";
 import {
   BOARD_HEIGHT,
   BOARD_WIDTH,
@@ -12,6 +17,13 @@ import {
 } from "../domain/types.js";
 
 const TYPE_ORDER = iterateTypesInOrder();
+
+/** Lowest placement origin row to try (negative allows options whose shape extends above the well). */
+const TILING_CANDIDATE_MIN_ORIGIN_Y = -4;
+
+/** Cap DFS recursion volume (each `dfs()` entry counts as one visit). Scales with mask size. */
+const TILING_DFS_VISIT_BUDGET_BASE = 500_000;
+const TILING_DFS_VISIT_BUDGET_PER_GRASS_CELL = 15_000;
 
 interface NormalizedShape {
   cells: [number, number][];
@@ -41,10 +53,6 @@ export interface TilingResult {
   trimmedCells: number;
 }
 
-function cloneBoard(b: Board): Board {
-  return b.map((row) => [...row]);
-}
-
 function grassCells(board: Board): [number, number][] {
   const out: [number, number][] = [];
   for (let y = 0; y < BOARD_HEIGHT; y++) {
@@ -63,7 +71,7 @@ function buildOptionsForTarget(target: Board): Map<string, PiecePlacement[]> {
     for (const rotation of ROTATIONS) {
       const { cells: rel, minX, minY } = normalizedShape(type, rotation);
       for (let ax = 0; ax < BOARD_WIDTH; ax++) {
-        for (let ay = -4; ay < BOARD_HEIGHT; ay++) {
+        for (let ay = TILING_CANDIDATE_MIN_ORIGIN_Y; ay < BOARD_HEIGHT; ay++) {
           const abs: [number, number][] = rel.map(([dx, dy]) => [ax + dx, ay + dy] as [number, number]);
           let ok = true;
           for (const [cx, cy] of abs) {
@@ -101,6 +109,8 @@ function tryTile(target: Board, minDistinctTypes: number): ReplayStep[] | null {
   const filled = new Set<string>();
   const usedPlacements: PiecePlacement[] = [];
   const typeUsed = new Set<TetrominoType>();
+  const maxDfsVisits = TILING_DFS_VISIT_BUDGET_BASE + grass.length * TILING_DFS_VISIT_BUDGET_PER_GRASS_CELL;
+  let dfsVisitCount = 0;
 
   function pickNextCell(): [number, number] | null {
     let best: [number, number] | null = null;
@@ -117,6 +127,8 @@ function tryTile(target: Board, minDistinctTypes: number): ReplayStep[] | null {
   }
 
   function dfs(): boolean {
+    if (dfsVisitCount >= maxDfsVisits) return false;
+    dfsVisitCount++;
     const next = pickNextCell();
     if (!next) {
       if (typeUsed.size >= minDistinctTypes) return true;
@@ -178,6 +190,11 @@ function tryTile(target: Board, minDistinctTypes: number): ReplayStep[] | null {
   for (const p of ordered) {
     if (!isValidLock(board, p)) return null;
     applyPlacement(board, p);
+  }
+
+  // Line clears during replay can remove grass; reject if the realized board ≠ target mask.
+  if (!boardsEqual(board, target)) {
+    return null;
   }
 
   return ordered.map((placement) => ({ placement }));

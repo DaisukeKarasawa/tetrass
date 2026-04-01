@@ -1,18 +1,21 @@
-import { applyPlacement, cloneBoard } from "../domain/board.js";
-import { isValidLock } from "../simulator/simulateReplay.js";
-import type { ReplayStep } from "../domain/types.js";
-import { BOARD_HEIGHT, BOARD_WIDTH } from "../domain/types.js";
+import { applyPlacement, createEmptyBoard, isValidLock } from "../domain/board.js";
+import { BOARD_HEIGHT, type ReplayStep } from "../domain/types.js";
+
+/** Bottom band of the pad (same row index idea as `planScriptedDoubleClearIntro` O locks). */
+const DIVERSITY_PAD_Y_LOW = BOARD_HEIGHT - 2;
+/** One row above `DIVERSITY_PAD_Y_LOW` (piece bounding-box top Y). */
+const DIVERSITY_PAD_Y_HIGH = BOARD_HEIGHT - 3;
 
 /**
  * Precomputed sequence (empty board -> line clear(s) -> empty) using I, J, L.
  * Together with the all-O intro, the full prefix uses 4+ tetromino types.
  */
 const EMBEDDED_PAD: ReplayStep[] = [
-  { placement: { type: "I", rotation: 0, x: 0, y: 18 } },
-  { placement: { type: "I", rotation: 0, x: 0, y: 17 } },
-  { placement: { type: "I", rotation: 0, x: 5, y: 18 } },
-  { placement: { type: "J", rotation: 2, x: 7, y: 17 } },
-  { placement: { type: "L", rotation: 2, x: 4, y: 17 } },
+  { placement: { type: "I", rotation: 0, x: 0, y: DIVERSITY_PAD_Y_LOW } },
+  { placement: { type: "I", rotation: 0, x: 0, y: DIVERSITY_PAD_Y_HIGH } },
+  { placement: { type: "I", rotation: 0, x: 5, y: DIVERSITY_PAD_Y_LOW } },
+  { placement: { type: "J", rotation: 2, x: 7, y: DIVERSITY_PAD_Y_HIGH } },
+  { placement: { type: "L", rotation: 2, x: 4, y: DIVERSITY_PAD_Y_HIGH } },
 ];
 
 export function planDiversityPadAfterIntro(): ReplayStep[] {
@@ -20,10 +23,7 @@ export function planDiversityPadAfterIntro(): ReplayStep[] {
 }
 
 export function assertDiversityPadValid(pad: ReplayStep[]): void {
-  const empty = Array.from({ length: BOARD_HEIGHT }, () =>
-    Array.from({ length: BOARD_WIDTH }, () => 0 as 0 | 1),
-  );
-  let b = cloneBoard(empty);
+  let b = createEmptyBoard();
   let clears = 0;
   const nonO = new Set<string>();
   for (const st of pad) {

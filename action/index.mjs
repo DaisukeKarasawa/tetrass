@@ -177,6 +177,29 @@ function clearFullRows(board) {
   }
   return cleared;
 }
+function lockCellsOverlapStack(board, cells) {
+  for (const [cx, cy] of cells) {
+    if (cx < 0 || cx >= BOARD_WIDTH || cy < 0 || cy >= BOARD_HEIGHT) {
+      return { ok: false, reason: "out_of_bounds" };
+    }
+    if (board[cy][cx] === 1) return { ok: false, reason: "overlap" };
+  }
+  return { ok: true };
+}
+function pieceCanMoveDownOnBoard(board, p) {
+  const cells = getCells(p.type, p.rotation, p.x, p.y + 1);
+  for (const [cx, cy] of cells) {
+    if (cy >= BOARD_HEIGHT) return false;
+    if (cy < 0) continue;
+    if (board[cy][cx] === 1) return false;
+  }
+  return true;
+}
+function isValidLock(board, p) {
+  const cells = getCells(p.type, p.rotation, p.x, p.y);
+  if (!lockCellsOverlapStack(board, cells).ok) return false;
+  return !pieceCanMoveDownOnBoard(board, p);
+}
 function applyPlacement(board, p) {
   const cells = getCells(p.type, p.rotation, p.x, p.y);
   for (const [cx, cy] of cells) {
@@ -188,7 +211,39 @@ function applyPlacement(board, p) {
   return { linesCleared: clearFullRows(board) };
 }
 
+// src/planner/diversityPad.ts
+var DIVERSITY_PAD_Y_LOW = BOARD_HEIGHT - 2;
+var DIVERSITY_PAD_Y_HIGH = BOARD_HEIGHT - 3;
+var EMBEDDED_PAD = [
+  { placement: { type: "I", rotation: 0, x: 0, y: DIVERSITY_PAD_Y_LOW } },
+  { placement: { type: "I", rotation: 0, x: 0, y: DIVERSITY_PAD_Y_HIGH } },
+  { placement: { type: "I", rotation: 0, x: 5, y: DIVERSITY_PAD_Y_LOW } },
+  { placement: { type: "J", rotation: 2, x: 7, y: DIVERSITY_PAD_Y_HIGH } },
+  { placement: { type: "L", rotation: 2, x: 4, y: DIVERSITY_PAD_Y_HIGH } }
+];
+function planDiversityPadAfterIntro() {
+  return EMBEDDED_PAD.map((step) => ({ placement: { ...step.placement } }));
+}
+function assertDiversityPadValid(pad) {
+  let b = createEmptyBoard();
+  let clears = 0;
+  const nonO = /* @__PURE__ */ new Set();
+  for (const st of pad) {
+    if (!isValidLock(b, st.placement)) {
+      throw new Error(`Invalid pad lock: ${JSON.stringify(st.placement)}`);
+    }
+    clears += applyPlacement(b, st.placement).linesCleared;
+    if (st.placement.type !== "O") nonO.add(st.placement.type);
+  }
+  const emptyEnd = b.every((row) => row.every((c) => c === 0));
+  if (!emptyEnd) throw new Error("Diversity pad must end empty.");
+  if (clears < 1) throw new Error("Diversity pad must clear at least one line.");
+  if (nonO.size < 3) throw new Error("Diversity pad must use at least 3 non-O tetromino types.");
+}
+
 // src/simulator/simulateReplay.ts
+var SPAWN_ROWS_ABOVE_LOCK = 24;
+var MAX_SOFT_DROP_SAMPLE_STEPS = 8;
 function placementFits(board, cells) {
   for (const [cx, cy] of cells) {
     if (cx < 0 || cx >= BOARD_WIDTH) return false;
@@ -197,47 +252,15 @@ function placementFits(board, cells) {
   }
   return true;
 }
-function cellsOverlapBoard(board, cells, ignoreBelowCheck) {
-  for (const [cx, cy] of cells) {
-    if (cx < 0 || cx >= BOARD_WIDTH || cy < 0 || cy >= BOARD_HEIGHT) {
-      return { ok: false, reason: "out_of_bounds" };
-    }
-    if (board[cy][cx] === 1) return { ok: false, reason: "overlap" };
-  }
-  if (ignoreBelowCheck) return { ok: true };
-  for (const [cx, cy] of cells) {
-    const belowY = cy + 1;
-    const hasMinoBelow = cells.some(([ox, oy]) => ox === cx && oy === belowY);
-    if (hasMinoBelow) continue;
-    if (belowY >= BOARD_HEIGHT) continue;
-    if (board[belowY][cx] === 0) return { ok: false, reason: "floating" };
-  }
-  return { ok: true };
-}
-function canMoveDown(board, p) {
-  const cells = getCells(p.type, p.rotation, p.x, p.y + 1);
-  for (const [cx, cy] of cells) {
-    if (cy >= BOARD_HEIGHT) return false;
-    if (cy < 0) continue;
-    if (board[cy][cx] === 1) return false;
-  }
-  return true;
-}
-function isValidLock(board, p) {
-  const cells = getCells(p.type, p.rotation, p.x, p.y);
-  if (!cellsOverlapBoard(board, cells, false).ok) return false;
-  return !canMoveDown(board, p);
-}
 function spawnAboveLock(p) {
-  return { ...p, y: p.y - 24 };
+  return { ...p, y: p.y - SPAWN_ROWS_ABOVE_LOCK };
 }
-var MAX_DROP_FRAMES = 8;
 function dropStride(dropRows) {
   if (dropRows <= 0) return 1;
-  return Math.max(1, Math.ceil(dropRows / MAX_DROP_FRAMES));
+  return Math.max(1, Math.ceil(dropRows / MAX_SOFT_DROP_SAMPLE_STEPS));
 }
 function simulateReplayForFrames(script) {
-  const board = createEmptyBoardMutable();
+  const board = createEmptyBoard();
   const frames = [];
   let totalLineClears = 0;
   const usedTypes = /* @__PURE__ */ new Set();
@@ -284,14 +307,8 @@ function simulateReplayForFrames(script) {
   }
   return { frames, finalBoard: board, totalLineClears, usedTypes };
 }
-function createEmptyBoardMutable() {
-  return Array.from(
-    { length: BOARD_HEIGHT },
-    () => Array.from({ length: BOARD_WIDTH }, () => 0)
-  );
-}
 function simulateReplayFast(script) {
-  const board = createEmptyBoardMutable();
+  const board = createEmptyBoard();
   let totalLineClears = 0;
   const usedTypes = /* @__PURE__ */ new Set();
   for (const step of script.steps) {
@@ -302,38 +319,6 @@ function simulateReplayFast(script) {
     totalLineClears += applyPlacement(board, step.placement).linesCleared;
   }
   return { frames: [], finalBoard: board, totalLineClears, usedTypes };
-}
-
-// src/planner/diversityPad.ts
-var EMBEDDED_PAD = [
-  { placement: { type: "I", rotation: 0, x: 0, y: 18 } },
-  { placement: { type: "I", rotation: 0, x: 0, y: 17 } },
-  { placement: { type: "I", rotation: 0, x: 5, y: 18 } },
-  { placement: { type: "J", rotation: 2, x: 7, y: 17 } },
-  { placement: { type: "L", rotation: 2, x: 4, y: 17 } }
-];
-function planDiversityPadAfterIntro() {
-  return EMBEDDED_PAD.map((step) => ({ placement: { ...step.placement } }));
-}
-function assertDiversityPadValid(pad) {
-  const empty = Array.from(
-    { length: BOARD_HEIGHT },
-    () => Array.from({ length: BOARD_WIDTH }, () => 0)
-  );
-  let b = cloneBoard(empty);
-  let clears = 0;
-  const nonO = /* @__PURE__ */ new Set();
-  for (const st of pad) {
-    if (!isValidLock(b, st.placement)) {
-      throw new Error(`Invalid pad lock: ${JSON.stringify(st.placement)}`);
-    }
-    clears += applyPlacement(b, st.placement).linesCleared;
-    if (st.placement.type !== "O") nonO.add(st.placement.type);
-  }
-  const emptyEnd = b.every((row) => row.every((c) => c === 0));
-  if (!emptyEnd) throw new Error("Diversity pad must end empty.");
-  if (clears < 1) throw new Error("Diversity pad must clear at least one line.");
-  if (nonO.size < 3) throw new Error("Diversity pad must use at least 3 non-O tetromino types.");
 }
 
 // src/planner/introClear.ts
@@ -353,6 +338,9 @@ function assertIntroValid(intro) {
 
 // src/planner/tetrominoTiling.ts
 var TYPE_ORDER2 = iterateTypesInOrder();
+var TILING_CANDIDATE_MIN_ORIGIN_Y = -4;
+var TILING_DFS_VISIT_BUDGET_BASE = 5e5;
+var TILING_DFS_VISIT_BUDGET_PER_GRASS_CELL = 15e3;
 function normalizedShape(type, rotation) {
   const raw = getCells(type, rotation, 0, 0);
   let minX = Infinity;
@@ -366,9 +354,6 @@ function normalizedShape(type, rotation) {
     minX,
     minY
   };
-}
-function cloneBoard2(b) {
-  return b.map((row) => [...row]);
 }
 function grassCells(board) {
   const out = [];
@@ -386,7 +371,7 @@ function buildOptionsForTarget(target) {
     for (const rotation of ROTATIONS) {
       const { cells: rel, minX, minY } = normalizedShape(type, rotation);
       for (let ax = 0; ax < BOARD_WIDTH; ax++) {
-        for (let ay = -4; ay < BOARD_HEIGHT; ay++) {
+        for (let ay = TILING_CANDIDATE_MIN_ORIGIN_Y; ay < BOARD_HEIGHT; ay++) {
           const abs = rel.map(([dx, dy]) => [ax + dx, ay + dy]);
           let ok = true;
           for (const [cx, cy] of abs) {
@@ -421,6 +406,8 @@ function tryTile(target, minDistinctTypes) {
   const filled = /* @__PURE__ */ new Set();
   const usedPlacements = [];
   const typeUsed = /* @__PURE__ */ new Set();
+  const maxDfsVisits = TILING_DFS_VISIT_BUDGET_BASE + grass.length * TILING_DFS_VISIT_BUDGET_PER_GRASS_CELL;
+  let dfsVisitCount = 0;
   function pickNextCell() {
     let best = null;
     for (const [x, y] of grass) {
@@ -435,6 +422,8 @@ function tryTile(target, minDistinctTypes) {
     return best;
   }
   function dfs() {
+    if (dfsVisitCount >= maxDfsVisits) return false;
+    dfsVisitCount++;
     const next = pickNextCell();
     if (!next) {
       if (typeUsed.size >= minDistinctTypes) return true;
@@ -490,10 +479,13 @@ function tryTile(target, minDistinctTypes) {
     if (!isValidLock(board, p)) return null;
     applyPlacement(board, p);
   }
+  if (!boardsEqual(board, target)) {
+    return null;
+  }
   return ordered.map((placement) => ({ placement }));
 }
 function tileTargetWithTrimming(target, minDistinctTypes) {
-  let trimmed = cloneBoard2(target);
+  let trimmed = cloneBoard(target);
   let trimmedCells = 0;
   const maxGrass = BOARD_WIDTH * BOARD_HEIGHT;
   for (let attempt = 0; attempt <= maxGrass; attempt++) {
