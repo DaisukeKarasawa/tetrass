@@ -32,7 +32,7 @@ jobs:
             img/tetrass.svg
             img/tetrass-dark.svg?palette=github-dark
 
-      - uses: stefanzweifel/git-auto-commit-action@v7
+      - uses: stefanzweifel/git-auto-commit-action@04702edda442b2e678b25b537cec683a1493fcb9 # v7.1.0
         with:
           commit_message: "chore: update Tetrass SVG"
           file_pattern: "img/*.svg"
