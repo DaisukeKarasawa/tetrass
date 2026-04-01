@@ -276,97 +276,6 @@ function assertDiversityPadValid(pad) {
   if (nonO.size < 3) throw new Error("Diversity pad must use at least 3 non-O tetromino types.");
 }
 
-// src/simulator/simulateReplay.ts
-var SPAWN_ROWS_ABOVE_LOCK = 24;
-var MAX_SOFT_DROP_SAMPLE_STEPS = 8;
-function placementFits(board, cells) {
-  for (const [cx, cy] of cells) {
-    if (cx < 0 || cx >= BOARD_WIDTH) return false;
-    if (cy >= BOARD_HEIGHT) return false;
-    if (cy >= 0 && board[cy][cx] === 1) return false;
-  }
-  return true;
-}
-function spawnAboveLock(p) {
-  return { ...p, y: p.y - SPAWN_ROWS_ABOVE_LOCK };
-}
-function dropStride(dropRows) {
-  if (dropRows <= 0) return 1;
-  return Math.max(1, Math.ceil(dropRows / MAX_SOFT_DROP_SAMPLE_STEPS));
-}
-function appendPreLockDropFrames(frames, board, lock) {
-  let current = spawnAboveLock(lock);
-  const targetY = lock.y;
-  const stride = dropStride(targetY - current.y);
-  const verticalPath = [current];
-  while (current.y < targetY) {
-    const nextY = Math.min(targetY, current.y + stride);
-    const next = { ...current, y: nextY };
-    const cells = getCells(next.type, next.rotation, next.x, next.y);
-    if (!placementFits(board, cells)) break;
-    current = next;
-    if (current.y < targetY) {
-      verticalPath.push(current);
-    }
-  }
-  while (current.y < targetY) {
-    const next = { ...current, y: current.y + 1 };
-    const cells = getCells(next.type, next.rotation, next.x, next.y);
-    if (!placementFits(board, cells)) break;
-    current = next;
-  }
-  const verticalReachesLock = current.x === lock.x && current.y === lock.y && current.rotation === lock.rotation;
-  if (verticalReachesLock) {
-    verticalPath.push(current);
-    for (const p of verticalPath) {
-      frames.push({ board: cloneBoard(board), active: p, linesClearedThisLock: 0 });
-    }
-  } else {
-    frames.push({
-      board: cloneBoard(board),
-      active: spawnAboveLock(lock),
-      linesClearedThisLock: 0
-    });
-    frames.push({ board: cloneBoard(board), active: lock, linesClearedThisLock: 0 });
-  }
-}
-function simulateReplayForFrames(script) {
-  const board = createEmptyBoard();
-  const frames = [];
-  let totalLineClears = 0;
-  const usedTypes = /* @__PURE__ */ new Set();
-  frames.push({ board: cloneBoard(board), active: null, linesClearedThisLock: 0 });
-  for (const step of script.steps) {
-    const lock = step.placement;
-    usedTypes.add(lock.type);
-    if (!isValidLock(board, lock)) {
-      throw new Error(`Invalid lock placement: ${JSON.stringify(lock)}`);
-    }
-    appendPreLockDropFrames(frames, board, lock);
-    const { linesCleared } = applyPlacement(board, lock);
-    totalLineClears += linesCleared;
-    frames.push({
-      board: cloneBoard(board),
-      active: null,
-      linesClearedThisLock: linesCleared
-    });
-  }
-  return { frames, finalBoard: board, totalLineClears, usedTypes };
-}
-function simulateReplayFast(script) {
-  const board = createEmptyBoard();
-  let totalLineClears = 0;
-  const usedTypes = /* @__PURE__ */ new Set();
-  for (const step of script.steps) {
-    usedTypes.add(step.placement.type);
-    if (!isValidLock(board, step.placement)) {
-      throw new Error(`Invalid lock placement: ${JSON.stringify(step.placement)}`);
-    }
-    totalLineClears += applyPlacement(board, step.placement).linesCleared;
-  }
-  return { frames: [], finalBoard: board, totalLineClears, usedTypes };
-}
-
 // src/planner/introClear.ts
 function planScriptedDoubleClearIntro() {
   const steps = [];
@@ -376,9 +285,16 @@ function planScriptedDoubleClearIntro() {
   return steps;
 }
 function assertIntroValid(intro) {
-  const r = simulateReplayFast({ steps: intro });
-  if (r.totalLineClears !== 2) throw new Error("Intro must clear exactly two lines.");
-  const empty = r.finalBoard.every((row) => row.every((c) => c === 0));
+  const board = createEmptyBoard();
+  let totalClears = 0;
+  for (const st of intro) {
+    if (!isValidLock(board, st.placement)) {
+      throw new Error(`Invalid intro lock: ${JSON.stringify(st.placement)}`);
+    }
+    totalClears += applyPlacement(board, st.placement).linesCleared;
+  }
+  if (totalClears !== 2) throw new Error("Intro must clear exactly two lines.");
+  const empty = board.every((row) => row.every((c) => c === 0));
   if (!empty) throw new Error("Intro must end on an empty board.");
 }
 
@@ -645,7 +561,7 @@ function validateColor(value) {
   const s = value.trim();
   if (s.length === 0) return DEFAULT_SAFE_COLOR;
   if (hasDangerousColorContent(s)) return DEFAULT_SAFE_COLOR;
-  if (/^#[0-9a-f]{3}$/i.test(s) || /^#[0-9a-f]{6}$/i.test(s)) {
+  if (/^#[0-9a-f]{3}$/i.test(s) || /^#[0-9a-f]{4}$/i.test(s) || /^#[0-9a-f]{6}$/i.test(s) || /^#[0-9a-f]{8}$/i.test(s)) {
     return s;
   }
   if (isValidRgbFunction(s) || isValidRgbaFunction(s)) {
@@ -675,7 +591,7 @@ function cellUse(x, y, href) {
   return `<use href="#${href}" x="${px}" y="${py}"/>`;
 }
 function buildSymbols(palette) {
-  const { empty: e, grass: g, ghost: h } = sanitizePalette(palette);
+  const { empty: e, grass: g, ghost: h } = palette;
   return `<defs>
 <symbol id="cE" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${e}" rx="2"/></symbol>
 <symbol id="cG" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${g}" rx="2"/></symbol>
@@ -738,6 +654,97 @@ ${buildSymbols(safePalette)}
 <rect width="100%" height="100%" fill="${safePalette.empty}"/>
 ${groups.join("\n")}
 </svg>`;
+}
+
+// src/simulator/simulateReplay.ts
+var SPAWN_ROWS_ABOVE_LOCK = 24;
+var MAX_SOFT_DROP_SAMPLE_STEPS = 8;
+function placementFits(board, cells) {
+  for (const [cx, cy] of cells) {
+    if (cx < 0 || cx >= BOARD_WIDTH) return false;
+    if (cy >= BOARD_HEIGHT) return false;
+    if (cy >= 0 && board[cy][cx] === 1) return false;
+  }
+  return true;
+}
+function spawnAboveLock(p) {
+  return { ...p, y: p.y - SPAWN_ROWS_ABOVE_LOCK };
+}
+function dropStride(dropRows) {
+  if (dropRows <= 0) return 1;
+  return Math.max(1, Math.ceil(dropRows / MAX_SOFT_DROP_SAMPLE_STEPS));
+}
+function appendPreLockDropFrames(frames, board, lock) {
+  let current = spawnAboveLock(lock);
+  const targetY = lock.y;
+  const stride = dropStride(targetY - current.y);
+  const verticalPath = [current];
+  while (current.y < targetY) {
+    const nextY = Math.min(targetY, current.y + stride);
+    const next = { ...current, y: nextY };
+    const cells = getCells(next.type, next.rotation, next.x, next.y);
+    if (!placementFits(board, cells)) break;
+    current = next;
+    if (current.y < targetY) {
+      verticalPath.push(current);
+    }
+  }
+  while (current.y < targetY) {
+    const next = { ...current, y: current.y + 1 };
+    const cells = getCells(next.type, next.rotation, next.x, next.y);
+    if (!placementFits(board, cells)) break;
+    current = next;
+  }
+  const verticalReachesLock = current.x === lock.x && current.y === lock.y && current.rotation === lock.rotation;
+  if (verticalReachesLock) {
+    verticalPath.push(current);
+    for (const p of verticalPath) {
+      frames.push({ board: cloneBoard(board), active: p, linesClearedThisLock: 0 });
+    }
+  } else {
+    frames.push({
+      board: cloneBoard(board),
+      active: spawnAboveLock(lock),
+      linesClearedThisLock: 0
+    });
+    frames.push({ board: cloneBoard(board), active: lock, linesClearedThisLock: 0 });
+  }
+}
+function simulateReplayForFrames(script) {
+  const board = createEmptyBoard();
+  const frames = [];
+  let totalLineClears = 0;
+  const usedTypes = /* @__PURE__ */ new Set();
+  frames.push({ board: cloneBoard(board), active: null, linesClearedThisLock: 0 });
+  for (const step of script.steps) {
+    const lock = step.placement;
+    usedTypes.add(lock.type);
+    if (!isValidLock(board, lock)) {
+      throw new Error(`Invalid lock placement: ${JSON.stringify(lock)}`);
+    }
+    appendPreLockDropFrames(frames, board, lock);
+    const { linesCleared } = applyPlacement(board, lock);
+    totalLineClears += linesCleared;
+    frames.push({
+      board: cloneBoard(board),
+      active: null,
+      linesClearedThisLock: linesCleared
+    });
+  }
+  return { frames, finalBoard: board, totalLineClears, usedTypes };
+}
+function simulateReplayFast(script) {
+  const board = createEmptyBoard();
+  let totalLineClears = 0;
+  const usedTypes = /* @__PURE__ */ new Set();
+  for (const step of script.steps) {
+    usedTypes.add(step.placement.type);
+    if (!isValidLock(board, step.placement)) {
+      throw new Error(`Invalid lock placement: ${JSON.stringify(step.placement)}`);
+    }
+    totalLineClears += applyPlacement(board, step.placement).linesCleared;
+  }
+  return { frames: [], finalBoard: board, totalLineClears, usedTypes };
 }
 
 // src/verify/finalBoardMatcher.ts

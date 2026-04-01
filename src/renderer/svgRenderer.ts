@@ -107,7 +107,7 @@ export function validateColor(value: string): string {
   if (s.length === 0) return DEFAULT_SAFE_COLOR;
   if (hasDangerousColorContent(s)) return DEFAULT_SAFE_COLOR;
 
-  if (/^#[0-9a-f]{3}$/i.test(s) || /^#[0-9a-f]{6}$/i.test(s)) {
+  if (/^#[0-9a-f]{3}$/i.test(s) || /^#[0-9a-f]{4}$/i.test(s) || /^#[0-9a-f]{6}$/i.test(s) || /^#[0-9a-f]{8}$/i.test(s)) {
     return s;
   }
   if (isValidRgbFunction(s) || isValidRgbaFunction(s)) {
@@ -144,7 +144,7 @@ function cellUse(x: number, y: number, href: string): string {
 }
 
 function buildSymbols(palette: SvgPalette): string {
-  const { empty: e, grass: g, ghost: h } = sanitizePalette(palette);
+  const { empty: e, grass: g, ghost: h } = palette;
   return `<defs>
 <symbol id="cE" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${e}" rx="2"/></symbol>
 <symbol id="cG" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${g}" rx="2"/></symbol>

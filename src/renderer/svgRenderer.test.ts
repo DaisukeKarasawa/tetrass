@@ -5,9 +5,11 @@ import { simulateReplayForFrames } from "../simulator/simulateReplay.js";
 import { buildAnimatedSvg, PALETTE_LIGHT, sanitizePalette, validateColor } from "./svgRenderer.js";
 
 describe("validateColor", () => {
-  it("accepts hex #rgb and #rrggbb", () => {
+  it("accepts hex #rgb, #rgba, #rrggbb, and #rrggbbaa", () => {
     expect(validateColor("#abc")).toBe("#abc");
     expect(validateColor("#aBcDeF")).toBe("#aBcDeF");
+    expect(validateColor("#abcd")).toBe("#abcd");
+    expect(validateColor("#aBcDeFf0")).toBe("#aBcDeFf0");
   });
 
   it("accepts rgb() and rgba()", () => {

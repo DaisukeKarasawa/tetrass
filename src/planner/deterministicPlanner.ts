@@ -1,10 +1,10 @@
-import type { Board, ReplayScript, ReplayStep } from "../domain/types.js";
+import type { Board, ReplayScript, ReplayStep, TetrominoType } from "../domain/types.js";
 import { assertDiversityPadValid, planDiversityPadAfterIntro } from "./diversityPad.js";
 import { assertIntroValid, planScriptedDoubleClearIntro } from "./introClear.js";
 import { tileTargetWithTrimming } from "./tetrominoTiling.js";
 
 function countDistinctTypes(steps: ReplayStep[]): number {
-  const s = new Set<string>();
+  const s = new Set<TetrominoType>();
   for (const st of steps) s.add(st.placement.type);
   return s.size;
 }
