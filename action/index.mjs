@@ -1,6 +1,6 @@
 // src/generateRunner.ts
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 
 // src/domain/types.ts
 var BOARD_WIDTH = 10;
@@ -139,6 +139,12 @@ function iterateTypesInOrder() {
 var ROTATIONS = [0, 1, 2, 3];
 
 // src/domain/board.ts
+function createEmptyBoard() {
+  return Array.from(
+    { length: BOARD_HEIGHT },
+    () => Array.from({ length: BOARD_WIDTH }, () => 0)
+  );
+}
 function cloneBoard(board) {
   return board.map((row) => [...row]);
 }
@@ -174,6 +180,9 @@ function clearFullRows(board) {
 function applyPlacement(board, p) {
   const cells = getCells(p.type, p.rotation, p.x, p.y);
   for (const [cx, cy] of cells) {
+    if (cx < 0 || cx >= BOARD_WIDTH || cy < 0 || cy >= BOARD_HEIGHT) {
+      throw new Error(`Invalid placement out of bounds: (${cx}, ${cy})`);
+    }
     board[cy][cx] = 1;
   }
   return { linesCleared: clearFullRows(board) };
@@ -304,7 +313,7 @@ var EMBEDDED_PAD = [
   { placement: { type: "L", rotation: 2, x: 4, y: 17 } }
 ];
 function planDiversityPadAfterIntro() {
-  return EMBEDDED_PAD;
+  return EMBEDDED_PAD.map((step) => ({ placement: { ...step.placement } }));
 }
 function assertDiversityPadValid(pad) {
   const empty = Array.from(
@@ -337,14 +346,14 @@ function planScriptedDoubleClearIntro() {
 }
 function assertIntroValid(intro) {
   const r = simulateReplayFast({ steps: intro });
-  if (r.totalLineClears < 1) throw new Error("Intro must perform at least one line clear.");
+  if (r.totalLineClears !== 2) throw new Error("Intro must clear exactly two lines.");
   const empty = r.finalBoard.every((row) => row.every((c) => c === 0));
   if (!empty) throw new Error("Intro must end on an empty board.");
 }
 
 // src/planner/tetrominoTiling.ts
 var TYPE_ORDER2 = iterateTypesInOrder();
-function normalizedShapeCells(type, rotation) {
+function normalizedShape(type, rotation) {
   const raw = getCells(type, rotation, 0, 0);
   let minX = Infinity;
   let minY = Infinity;
@@ -352,7 +361,11 @@ function normalizedShapeCells(type, rotation) {
     minX = Math.min(minX, x);
     minY = Math.min(minY, y);
   }
-  return raw.map(([x, y]) => [x - minX, y - minY]);
+  return {
+    cells: raw.map(([x, y]) => [x - minX, y - minY]),
+    minX,
+    minY
+  };
 }
 function cloneBoard2(b) {
   return b.map((row) => [...row]);
@@ -371,7 +384,7 @@ function buildOptionsForTarget(target) {
   const options = /* @__PURE__ */ new Map();
   for (const type of TYPE_ORDER2) {
     for (const rotation of ROTATIONS) {
-      const rel = normalizedShapeCells(type, rotation);
+      const { cells: rel, minX, minY } = normalizedShape(type, rotation);
       for (let ax = 0; ax < BOARD_WIDTH; ax++) {
         for (let ay = -4; ay < BOARD_HEIGHT; ay++) {
           const abs = rel.map(([dx, dy]) => [ax + dx, ay + dy]);
@@ -387,7 +400,7 @@ function buildOptionsForTarget(target) {
             }
           }
           if (!ok) continue;
-          const p = { type, rotation, x: ax, y: ay };
+          const p = { type, rotation, x: ax - minX, y: ay - minY };
           for (const [cx, cy] of abs) {
             const k = `${cx},${cy}`;
             const arr = options.get(k) ?? [];
@@ -464,7 +477,20 @@ function tryTile(target, minDistinctTypes) {
     return false;
   }
   if (!dfs()) return null;
-  return usedPlacements.map((placement) => ({ placement }));
+  const ordered = [...usedPlacements].sort((a, b) => {
+    if (a.y !== b.y) return b.y - a.y;
+    if (a.x !== b.x) return a.x - b.x;
+    const ai = TYPE_ORDER2.indexOf(a.type);
+    const bi = TYPE_ORDER2.indexOf(b.type);
+    if (ai !== bi) return ai - bi;
+    return a.rotation - b.rotation;
+  });
+  const board = createEmptyBoard();
+  for (const p of ordered) {
+    if (!isValidLock(board, p)) return null;
+    applyPlacement(board, p);
+  }
+  return ordered.map((placement) => ({ placement }));
 }
 function tileTargetWithTrimming(target, minDistinctTypes) {
   let trimmed = cloneBoard2(target);
@@ -610,7 +636,7 @@ function paletteFor(kind) {
   return kind === "dark" ? PALETTE_DARK : PALETTE_LIGHT;
 }
 async function runTetrassGenerate(opts) {
-  const { login, token, outputs, useSample } = opts;
+  const { login, token, outputs, useSample, workspaceRoot } = opts;
   if (outputs.length === 0) throw new Error("At least one output path is required.");
   let days;
   if (useSample) {
@@ -640,12 +666,17 @@ async function runTetrassGenerate(opts) {
     throw new Error(`Acceptance failed: need >=4 piece types, got ${fast.usedTypes.size}`);
   }
   const { frames } = simulateReplayForFrames(script);
-  const needLight = outputs.some((o) => o.palette === "light");
-  const needDark = outputs.some((o) => o.palette === "dark");
-  const lightSvg = needLight ? buildAnimatedSvg(frames, paletteFor("light")) : null;
-  const darkSvg = needDark ? buildAnimatedSvg(frames, paletteFor("dark")) : null;
+  const svgByPalette = /* @__PURE__ */ new Map();
+  const normalizedWorkspaceRoot = workspaceRoot ? resolve(workspaceRoot) : null;
   for (const out of outputs) {
-    const svg = out.palette === "dark" ? darkSvg : lightSvg;
+    if (normalizedWorkspaceRoot) {
+      assertPathInsideRoot(out.filePath, normalizedWorkspaceRoot);
+    }
+    let svg = svgByPalette.get(out.palette);
+    if (!svg) {
+      svg = buildAnimatedSvg(frames, paletteFor(out.palette));
+      svgByPalette.set(out.palette, svg);
+    }
     const dir = dirname(out.filePath);
     await mkdir(dir, { recursive: true });
     await writeFile(out.filePath, svg, "utf8");
@@ -655,6 +686,7 @@ async function runTetrassGenerate(opts) {
   );
 }
 function parseOutputLines(raw, workspaceRoot) {
+  const normalizedRoot = resolve(workspaceRoot);
   const lines = raw.split(/\r?\n/);
   const result = [];
   for (const line of lines) {
@@ -669,11 +701,27 @@ function parseOutputLines(raw, workspaceRoot) {
       const params = new URLSearchParams(query);
       const pal = params.get("palette");
       if (pal === "github-dark" || pal === "dark") palette = "dark";
+      else if (pal && pal !== "light") {
+        console.warn(
+          `Unrecognized palette '${pal}' for output '${filePart}'; defaulting to light.`
+        );
+      }
+    }
+    if (!filePart) {
+      throw new Error(`Invalid output path: '${trimmed}'`);
     }
     const abs = resolve(workspaceRoot, filePart);
+    assertPathInsideRoot(abs, normalizedRoot);
     result.push({ filePath: abs, palette });
   }
   return result;
+}
+function assertPathInsideRoot(filePath, root) {
+  const rel = relative(root, filePath);
+  if (rel === "") return;
+  if (rel.startsWith("..") || rel.includes(`${sep}..${sep}`) || rel === "..") {
+    throw new Error(`Output path '${filePath}' is outside workspace root '${root}'.`);
+  }
 }
 
 // src/action-entry.ts
@@ -693,7 +741,8 @@ async function main() {
     login,
     token,
     outputs,
-    useSample: process.env.TETRASS_USE_SAMPLE === "1" || process.env.TETRASS_OFFLINE === "1"
+    useSample: process.env.TETRASS_USE_SAMPLE === "1" || process.env.TETRASS_OFFLINE === "1",
+    workspaceRoot: workspace
   });
 }
 main().catch((e) => {
