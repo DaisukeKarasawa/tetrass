@@ -27,6 +27,11 @@ const PAD = 2;
 const W = BOARD_WIDTH * CELL + PAD * 2;
 const H = BOARD_HEIGHT * CELL + PAD * 2;
 
+/** SMIL: visible duration per simulation frame in one loop cycle. */
+const SVG_FRAME_DURATION_MS = 80;
+/** SMIL: extra hold on the final frame before the cycle repeats. */
+const SVG_HOLD_LAST_FRAME_MS = 1500;
+
 function cellUse(x: number, y: number, href: string): string {
   const px = PAD + x * CELL;
   const py = PAD + y * CELL;
@@ -76,8 +81,8 @@ function frameToSvgInner(frame: SimulationFrame): string {
 export function buildAnimatedSvg(frames: SimulationFrame[], palette: SvgPalette): string {
   if (frames.length === 0) throw new Error("No frames to render");
 
-  const frameDurMs = 80;
-  const holdLastMs = 1500;
+  const frameDurMs = SVG_FRAME_DURATION_MS;
+  const holdLastMs = SVG_HOLD_LAST_FRAME_MS;
   const n = frames.length;
   const cycleMs = n * frameDurMs + holdLastMs;
 

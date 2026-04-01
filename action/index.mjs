@@ -553,6 +553,8 @@ var CELL = 18;
 var PAD = 2;
 var W = BOARD_WIDTH * CELL + PAD * 2;
 var H = BOARD_HEIGHT * CELL + PAD * 2;
+var SVG_FRAME_DURATION_MS = 80;
+var SVG_HOLD_LAST_FRAME_MS = 1500;
 function cellUse(x, y, href) {
   const px = PAD + x * CELL;
   const py = PAD + y * CELL;
@@ -593,8 +595,8 @@ function frameToSvgInner(frame) {
 }
 function buildAnimatedSvg(frames, palette) {
   if (frames.length === 0) throw new Error("No frames to render");
-  const frameDurMs = 80;
-  const holdLastMs = 1500;
+  const frameDurMs = SVG_FRAME_DURATION_MS;
+  const holdLastMs = SVG_HOLD_LAST_FRAME_MS;
   const n = frames.length;
   const cycleMs = n * frameDurMs + holdLastMs;
   const groups = [];
