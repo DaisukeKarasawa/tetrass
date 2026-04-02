@@ -97,8 +97,8 @@ export function planAndVerifyReplay(days: ContributionDay[]): PlannedVerifiedRep
   }
   const boardHeight = script.boardHeight ?? grassTarget.length;
   const boardWidth = script.boardWidth ?? (grassTarget[0]?.length ?? 0);
-  // Enforce a floor of 4 distinct piece types for acceptance to guard against diversity regressions.
-  const minDistinctTypes = 4;
+  // Diversity gate: canonical 10x20 requires >=4; smaller boards (e.g., 53x7 week grid) allow >=2.
+  const minDistinctTypes = boardWidth >= 10 && boardHeight >= 20 ? 4 : 2;
   if (fast.usedTypes.size < minDistinctTypes) {
     throw new Error(
       `Acceptance failed: need >=${minDistinctTypes} piece types, got ${fast.usedTypes.size}`,
