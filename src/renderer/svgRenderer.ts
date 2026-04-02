@@ -131,14 +131,15 @@ export function sanitizeGrassPalette(p: GrassPalette): GrassPalette {
   };
 }
 
-const CELL = 18;
+const cellSize = 18;
+const step = 20; // cellSize + 2px gap
 const PAD = 2;
 const RX = 2;
 /** Fraction of cycle used to snap back to the initial state before repeat. */
 const CYCLE_TAIL_RESET = 0.0012;
 
 function cellPx(x: number, y: number): { px: number; py: number } {
-  return { px: PAD + x * CELL, py: PAD + y * CELL };
+  return { px: PAD + x * step, py: PAD + y * step };
 }
 
 function cellUse(x: number, y: number, href: string): string {
@@ -149,7 +150,7 @@ function cellUse(x: number, y: number, href: string): string {
 function buildSymbols(p: GrassPalette): string {
   const { emptyCell: e, level1: l1, level2: l2, level3: l3, level4: l4 } = p;
   const sym = (id: string, fill: string) =>
-    `<symbol id="${id}" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${fill}" rx="${RX}"/></symbol>`;
+    `<symbol id="${id}" viewBox="0 0 ${cellSize} ${cellSize}"><rect width="${cellSize}" height="${cellSize}" fill="${fill}" rx="${RX}"/></symbol>`;
   return `<defs>
 ${sym("cE", e)}
 ${sym("cG1", l1)}
@@ -177,7 +178,7 @@ function renderGroupDrop(
   seg: GroupDropSegment,
   cycleMs: number,
 ): string {
-  const fallPx = seg.fallOffsetCells * CELL;
+  const fallPx = seg.fallOffsetCells * step;
   const { startMs, dropDurationMs } = seg;
   const a = startMs / cycleMs;
   const b = (startMs + dropDurationMs) / cycleMs;
@@ -215,8 +216,8 @@ export function buildGrassDropSvg(segments: GroupDropSegment[], palette: GrassPa
 
   const safe = sanitizeGrassPalette(palette);
   const cycleMs = totalCycleMs(segments);
-  const boardW = GRID_VISIBLE_WEEKS * CELL + PAD * 2;
-  const boardH = GRID_WEEKDAYS * CELL + PAD * 2;
+  const boardW = GRID_VISIBLE_WEEKS * step + PAD * 2;
+  const boardH = GRID_WEEKDAYS * step + PAD * 2;
 
   const drops = segments.map((s) => renderGroupDrop(s, cycleMs)).filter((x) => x.length > 0).join("\n");
 

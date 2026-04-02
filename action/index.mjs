@@ -343,12 +343,13 @@ function sanitizeGrassPalette(p) {
     level4: validateColor(p.level4)
   };
 }
-var CELL = 18;
+var cellSize = 18;
+var step = 20;
 var PAD = 2;
 var RX = 2;
 var CYCLE_TAIL_RESET = 12e-4;
 function cellPx(x, y) {
-  return { px: PAD + x * CELL, py: PAD + y * CELL };
+  return { px: PAD + x * step, py: PAD + y * step };
 }
 function cellUse(x, y, href) {
   const { px, py } = cellPx(x, y);
@@ -356,7 +357,7 @@ function cellUse(x, y, href) {
 }
 function buildSymbols(p) {
   const { emptyCell: e, level1: l1, level2: l2, level3: l3, level4: l4 } = p;
-  const sym = (id, fill) => `<symbol id="${id}" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${fill}" rx="${RX}"/></symbol>`;
+  const sym = (id, fill) => `<symbol id="${id}" viewBox="0 0 ${cellSize} ${cellSize}"><rect width="${cellSize}" height="${cellSize}" fill="${fill}" rx="${RX}"/></symbol>`;
   return `<defs>
 ${sym("cE", e)}
 ${sym("cG1", l1)}
@@ -378,7 +379,7 @@ function renderEmptyGrid() {
   return s;
 }
 function renderGroupDrop(seg, cycleMs) {
-  const fallPx = seg.fallOffsetCells * CELL;
+  const fallPx = seg.fallOffsetCells * step;
   const { startMs, dropDurationMs } = seg;
   const a = startMs / cycleMs;
   const b = (startMs + dropDurationMs) / cycleMs;
@@ -405,8 +406,8 @@ function buildGrassDropSvg(segments, palette) {
   if (segments.length === 0) throw new Error("No drop segments");
   const safe = sanitizeGrassPalette(palette);
   const cycleMs = totalCycleMs(segments);
-  const boardW = GRID_VISIBLE_WEEKS * CELL + PAD * 2;
-  const boardH = GRID_WEEKDAYS * CELL + PAD * 2;
+  const boardW = GRID_VISIBLE_WEEKS * step + PAD * 2;
+  const boardH = GRID_WEEKDAYS * step + PAD * 2;
   const drops = segments.map((s) => renderGroupDrop(s, cycleMs)).filter((x) => x.length > 0).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${boardW}" height="${boardH}" viewBox="0 0 ${boardW} ${boardH}" role="img" aria-label="Contribution graph animation">
@@ -595,9 +596,9 @@ function canonicalizeOutputPathUnderWorkspace(lexicalAbs, workspaceResolved) {
   const parts = rel.split(sep).filter((p) => p.length > 0);
   let cur = rootCanon;
   for (let i = 0; i < parts.length; i++) {
-    const step = join(cur, parts[i]);
-    if (existsSync(step)) {
-      cur = realpathSync(step);
+    const step2 = join(cur, parts[i]);
+    if (existsSync(step2)) {
+      cur = realpathSync(step2);
       assertPathInsideRoot(cur, rootCanon);
     } else {
       cur = join(cur, ...parts.slice(i));
