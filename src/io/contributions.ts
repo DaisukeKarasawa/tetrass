@@ -1,8 +1,8 @@
 import type { Board } from "../domain/types.js";
-import { BOARD_HEIGHT, BOARD_WIDTH } from "../domain/types.js";
 
 export interface ContributionDay {
   date: string;
+  weekday?: number;
   contributionCount: number;
 }
 
@@ -33,6 +33,7 @@ query($login: String!) {
         weeks {
           contributionDays {
             date
+            weekday
             contributionCount
           }
         }
@@ -98,29 +99,48 @@ export function flattenContributionDays(cal: ContributionCalendar): Contribution
   return days;
 }
 
-const CELLS = BOARD_WIDTH * BOARD_HEIGHT;
+const GITHUB_WEEKDAYS = 7;
+const GITHUB_VISIBLE_WEEKS = 53;
 
 /** Length of the deterministic offline contribution calendar (>= playfield cell count). */
 const SAMPLE_CONTRIBUTION_DAY_COUNT = 400;
 
+function inferredWeekdayAt(day: ContributionDay): number {
+  if (day.weekday != null) return day.weekday;
+  const dow = new Date(`${day.date}T00:00:00Z`).getUTCDay();
+  return dow;
+}
+
 /**
- * Map the last N contribution days into the playfield: bottom row left-to-right, then upward.
+ * Map contributions to GitHub-native week grid:
+ * - x = week index (chronological, oldest visible week at x=0)
+ * - y = weekday (0..6, same axis as GitHub contributionDays.weekday)
  * contributionCount > 0 => grass (1).
  */
 export function contributionDaysToTargetBoard(days: ContributionDay[]): Board {
-  const values = days.map((d) => (d.contributionCount > 0 ? 1 : 0));
-  const need = CELLS;
-  const slice =
-    values.length >= need ? values.slice(values.length - need) : [...Array(need - values.length).fill(0), ...values];
-
-  const board: Board = Array.from({ length: BOARD_HEIGHT }, () =>
-    Array.from({ length: BOARD_WIDTH }, () => 0 as 0 | 1),
+  if (days.length === 0) {
+    return Array.from({ length: GITHUB_WEEKDAYS }, () =>
+      Array.from({ length: GITHUB_VISIBLE_WEEKS }, () => 0 as 0 | 1),
+    );
+  }
+  const totalWeeks = Math.ceil(days.length / GITHUB_WEEKDAYS);
+  const visibleWeeks = Math.min(GITHUB_VISIBLE_WEEKS, totalWeeks);
+  const startDayIdx = Math.max(0, (totalWeeks - visibleWeeks) * GITHUB_WEEKDAYS);
+  const visibleDays = days.slice(startDayIdx);
+  // Always emit a GitHub-profile-sized board (53 visible weeks), right-aligning
+  // the available weeks so sparse/short samples still map to the same viewport.
+  const width = GITHUB_VISIBLE_WEEKS;
+  const xOffset = GITHUB_VISIBLE_WEEKS - visibleWeeks;
+  const board: Board = Array.from({ length: GITHUB_WEEKDAYS }, () =>
+    Array.from({ length: width }, () => 0 as 0 | 1),
   );
-  let i = 0;
-  for (let y = BOARD_HEIGHT - 1; y >= 0; y--) {
-    for (let x = 0; x < BOARD_WIDTH; x++) {
-      board[y][x] = slice[i] as 0 | 1;
-      i++;
+
+  for (let i = 0; i < visibleDays.length; i++) {
+    const day = visibleDays[i];
+    const x = xOffset + Math.floor(i / GITHUB_WEEKDAYS);
+    const y = inferredWeekdayAt(day);
+    if (x >= 0 && x < width && y >= 0 && y < GITHUB_WEEKDAYS) {
+      board[y][x] = day.contributionCount > 0 ? 1 : 0;
     }
   }
   return board;
@@ -130,29 +150,23 @@ export function contributionDaysToTargetBoard(days: ContributionDay[]): Board {
 export function buildSampleContributionDays(): ContributionDay[] {
   const days: ContributionDay[] = [];
   const start = new Date("2024-01-01T00:00:00Z");
-  /** Last `CELLS` days map into the playfield; earlier days are ignored by `contributionDaysToTargetBoard`. */
-  const tailStart = SAMPLE_CONTRIBUTION_DAY_COUNT - CELLS;
+  const sampleWeeks = Math.ceil(SAMPLE_CONTRIBUTION_DAY_COUNT / GITHUB_WEEKDAYS);
   /**
    * Deterministic "grass" profile for sample mode:
-   * - Occupy columns 0..7 on rows 8..19 (96 cells total)
-   * - Avoid full 10-cell rows so replay does not collapse via line clears
+   * - Occupy weekdays 1..5 for weeks 6..(sampleWeeks-4)
+   * - Avoid full rows so replay does not collapse via line clears
    * - Keep a visibly non-trivial animation when users run without API access
    */
-  const sampleGrassCell = (x: number, y: number): boolean => x <= 7 && y >= 8;
+  const sampleGrassCell = (week: number, weekday: number): boolean =>
+    week >= 6 && week <= sampleWeeks - 4 && weekday >= 1 && weekday <= 5;
   for (let i = 0; i < SAMPLE_CONTRIBUTION_DAY_COUNT; i++) {
     const d = new Date(start);
     d.setUTCDate(start.getUTCDate() + i);
     const date = d.toISOString().slice(0, 10);
-    let contributionCount = 0;
-    if (i >= tailStart) {
-      const idxInSlice = i - tailStart;
-      const x = idxInSlice % BOARD_WIDTH;
-      const y = BOARD_HEIGHT - 1 - Math.floor(idxInSlice / BOARD_WIDTH);
-      if (sampleGrassCell(x, y)) {
-        contributionCount = 1;
-      }
-    }
-    days.push({ date, contributionCount });
+    const week = Math.floor(i / GITHUB_WEEKDAYS);
+    const weekday = i % GITHUB_WEEKDAYS;
+    const contributionCount = sampleGrassCell(week, weekday) ? 1 : 0;
+    days.push({ date, weekday, contributionCount });
   }
   return days;
 }

@@ -18,6 +18,10 @@ vi.mock("./io/contributions.js", async (importOriginal) => {
 
 import { buildSampleContributionDays, fetchContributionCalendar } from "./io/contributions.js";
 import { planAndVerifyReplay, runTetrassGenerate } from "./generateRunner.js";
+import {
+  assertSvgFinalBoardMatchesTarget,
+  summarizeSvgReplay,
+} from "./verify/svgFinalStateMatcher.js";
 
 describe("runTetrassGenerate (integration)", () => {
   beforeEach(() => {
@@ -41,6 +45,14 @@ describe("runTetrassGenerate (integration)", () => {
     expect(text).toContain("<svg");
     expect(text).toContain("Tetrass");
     expect(text).toContain('href="#cG"');
+    const { grassTarget } = planAndVerifyReplay(buildSampleContributionDays());
+    expect(() => assertSvgFinalBoardMatchesTarget(text, grassTarget)).not.toThrow();
+    const stats = summarizeSvgReplay(text);
+    expect(stats.frames.length).toBeGreaterThan(1);
+    expect(stats.hadSingleCellActiveFrame).toBe(true);
+    expect(stats.hadMultiCellActiveFrame).toBe(true);
+    expect(stats.hadRowClearLikeTransition).toBe(true);
+    expect(Buffer.byteLength(text, "utf8")).toBeLessThan(1_200_000);
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -58,6 +70,8 @@ describe("runTetrassGenerate (integration)", () => {
     const text = await readFile(out, "utf8");
     expect(text).toContain("<svg");
     expect(text).toContain('href="#cG"');
+    const { grassTarget } = planAndVerifyReplay(buildSampleContributionDays());
+    expect(() => assertSvgFinalBoardMatchesTarget(text, grassTarget)).not.toThrow();
     await rm(dir, { recursive: true, force: true });
   });
 

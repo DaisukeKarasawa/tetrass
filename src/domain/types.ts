@@ -7,6 +7,11 @@ export type Cell = 0 | 1;
 
 export type Board = Cell[][];
 
+export interface BoardDimensions {
+  width: number;
+  height: number;
+}
+
 export type RotationIndex = 0 | 1 | 2 | 3;
 
 export interface PiecePlacement {
@@ -26,4 +31,8 @@ export interface ReplayStep {
 
 export interface ReplayScript {
   steps: ReplayStep[];
+  /** Optional board width for dynamic layouts (defaults to BOARD_WIDTH when omitted). */
+  boardWidth?: number;
+  /** Optional board height for dynamic layouts (defaults to BOARD_HEIGHT when omitted). */
+  boardHeight?: number;
 }

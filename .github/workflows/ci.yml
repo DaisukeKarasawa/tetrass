@@ -24,4 +24,6 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npm test
+      - name: Artifact-level checks (strict board match)
+        run: npx vitest run src/verify/svgFinalStateMatcher.test.ts src/generateRunner.integration.test.ts
       - run: git diff --exit-code action/index.mjs

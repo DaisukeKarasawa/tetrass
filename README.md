@@ -64,8 +64,8 @@ Use your default branch name in place of `main` if it differs.
 ## How it works
 
 1. Fetches the contribution calendar from the GitHub GraphQL API. The composite action uses `GITHUB_TOKEN` (`github.token`) and fails fast if it is missing unless you enable sample/offline mode. Locally, provide `GITHUB_TOKEN` for real data, set `TETRASS_USE_SAMPLE=1` (or `TETRASS_OFFLINE=1`) for offline sample data, or set `TETRASS_ALLOW_UNAUTH_FALLBACK=1` (CLI only) to allow a sample fallback when an unauthenticated fetch fails.
-2. Maps the last 200 days into a 10×20 playfield (bottom row left-to-right, then upward).
-3. Builds a fixed replay: scripted line clears + a precomputed diversity segment + exact tetromino tiling of the grass mask (trimming single cells from the top if the mask is not tileable by tetrominoes).
+2. Maps contributions to a GitHub-native weekly grid: **x = week index, y = weekday**, and keeps the visible 53-week window.
+3. Builds a deterministic replay with line clears and mixed block behavior (monomino + tetromino), then tiles the contribution mask so the final board matches the target exactly.
 4. Writes the SVG files you listed under `outputs`.
 
 ## Local generation (this repo / development)
@@ -94,16 +94,14 @@ TETRASS_USE_SAMPLE=1 npm run generate:tetrass
 
 Sample/offline mode uses a deterministic non-trivial board profile (not a single tetromino) so output remains visually meaningful.
 
-### Retention guard (to avoid tiny misleading output)
+### Artifact-level correctness checks
 
-For non-trivial contribution masks, Tetrass now enforces a minimum retained-grass ratio after deterministic trimming.  
-If a mask can only be tiled by discarding too much grass, generation fails with an explicit error such as:
+The integration tests validate output artifacts directly (not only internal planner state):
 
-```text
-Cannot tile contribution mask with acceptable retention: kept X/Y cells (...) below required ...%.
-```
-
-This is intentional: the tool prefers failing clearly over silently producing an almost-empty animation.
+- final SVG frame equals target board cell-for-cell,
+- both single-cell and multi-cell active drops appear in animation,
+- at least one line-clear-like transition occurs,
+- output stays within a practical profile-friendly size budget.
 
 CLI-only: if you intentionally run without `GITHUB_TOKEN` and want a deterministic sample when the public GraphQL request fails, set `TETRASS_ALLOW_UNAUTH_FALLBACK=1` (not recommended for workflows that should reflect real contributions).
 

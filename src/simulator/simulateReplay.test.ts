@@ -9,7 +9,8 @@ describe("simulateReplayFast", () => {
     const r = simulateReplayFast({ steps: intro });
     expect(r.totalLineClears).toBe(2);
     expect(r.finalBoard.every((row) => row.every((c) => c === 0))).toBe(true);
-    expect(r.usedTypes.has("O")).toBe(true);
+    expect(r.usedTypes.has("M")).toBe(true);
+    expect(r.usedTypes.has("I")).toBe(true);
     expect(r.frames).toEqual([]);
   });
 

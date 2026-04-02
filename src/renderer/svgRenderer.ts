@@ -3,6 +3,7 @@ import { BOARD_HEIGHT, BOARD_WIDTH } from "../domain/types.js";
 import { getCells } from "../domain/tetromino.js";
 import type { PiecePlacement } from "../domain/types.js";
 import type { SimulationFrame } from "../simulator/simulateReplay.js";
+import { getBoardDimensions } from "../domain/board.js";
 
 /**
  * Colors for empty / grass / ghost cells in the SVG renderer.
@@ -129,8 +130,6 @@ export function sanitizePalette(p: SvgPalette): SvgPalette {
 
 const CELL = 18;
 const PAD = 2;
-const W = BOARD_WIDTH * CELL + PAD * 2;
-const H = BOARD_HEIGHT * CELL + PAD * 2;
 
 /** SMIL: visible duration per simulation frame in one loop cycle. */
 const SVG_FRAME_DURATION_MS = 80;
@@ -143,6 +142,16 @@ function cellUse(x: number, y: number, href: string): string {
   return `<use href="#${href}" x="${px}" y="${py}"/>`;
 }
 
+function getFrameBoardDimensions(frames: SimulationFrame[]): { width: number; height: number } {
+  const first = frames[0];
+  if (!first) return { width: BOARD_WIDTH, height: BOARD_HEIGHT };
+  const { width, height } = getBoardDimensions(first.board);
+  return {
+    width: width || BOARD_WIDTH,
+    height: height || BOARD_HEIGHT,
+  };
+}
+
 function buildSymbols(palette: SvgPalette): string {
   const { empty: e, grass: g, ghost: h } = palette;
   return `<defs>
@@ -152,30 +161,99 @@ function buildSymbols(palette: SvgPalette): string {
 </defs>`;
 }
 
-function renderBoardUses(board: Board): string {
-  let s = "";
-  for (let y = 0; y < BOARD_HEIGHT; y++) {
-    for (let x = 0; x < BOARD_WIDTH; x++) {
-      s += cellUse(x, y, board[y][x] ? "cG" : "cE");
-    }
-  }
-  return s;
-}
-
-function renderActiveUses(active: PiecePlacement | null): string {
+function renderActiveUses(active: PiecePlacement | null, width: number, height: number): string {
   if (!active) return "";
   const cells = getCells(active.type, active.rotation, active.x, active.y);
   let s = "";
+  const safeWidth = Math.max(width, 0);
+  const safeHeight = Math.max(height, 0);
   for (const [cx, cy] of cells) {
-    if (cy >= 0 && cy < BOARD_HEIGHT && cx >= 0 && cx < BOARD_WIDTH) {
+    if (cy >= 0 && cy < safeHeight && cx >= 0 && cx < safeWidth) {
       s += cellUse(cx, cy, "cH");
     }
   }
   return s;
 }
 
-function frameToSvgInner(frame: SimulationFrame): string {
-  return renderBoardUses(frame.board) + renderActiveUses(frame.active);
+function toKeyTime(frameIdx: number, frameDurMs: number, cycleMs: number): string {
+  return ((frameIdx * frameDurMs) / cycleMs).toFixed(6);
+}
+
+function renderBaseEmptyGrid(width: number, height: number): string {
+  let s = "";
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) s += cellUse(x, y, "cE");
+  }
+  return s;
+}
+
+function renderBoardCellAnimations(
+  frames: SimulationFrame[],
+  width: number,
+  height: number,
+  frameDurMs: number,
+  cycleMs: number,
+): string {
+  const n = frames.length;
+  let out = "";
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const states: number[] = [];
+      for (let i = 0; i < n; i++) states.push(frames[i].board[y][x] ? 1 : 0);
+      const values: string[] = [];
+      const keyTimes: string[] = [];
+      let prev = states[0] ?? 0;
+      values.push(String(prev));
+      keyTimes.push("0");
+      for (let i = 1; i < n; i++) {
+        const cur = states[i];
+        if (cur === prev) continue;
+        keyTimes.push(toKeyTime(i, frameDurMs, cycleMs));
+        values.push(String(cur));
+        prev = cur;
+      }
+      keyTimes.push("1");
+      values.push(String(prev));
+      // Skip cells that are always empty.
+      if (!values.some((v) => v === "1")) continue;
+      const px = PAD + x * CELL;
+      const py = PAD + y * CELL;
+      out += `<use href="#cG" x="${px}" y="${py}" opacity="${states[0] ? 1 : 0}">
+<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes.join(";")}" values="${values.join(";")}"/>
+</use>`;
+    }
+  }
+  return out;
+}
+
+function renderActiveGroups(
+  frames: SimulationFrame[],
+  width: number,
+  height: number,
+  frameDurMs: number,
+  cycleMs: number,
+): string {
+  const n = frames.length;
+  const groups: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const inner = renderActiveUses(frames[i].active, width, height);
+    if (!inner) continue;
+    if (i < n - 1) {
+      const start = toKeyTime(i, frameDurMs, cycleMs);
+      const end = toKeyTime(i + 1, frameDurMs, cycleMs);
+      groups.push(`<g opacity="0">
+${inner}
+<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="0;${start};${end};1" values="0;1;0;0"/>
+</g>`);
+    } else {
+      const start = toKeyTime(i, frameDurMs, cycleMs);
+      groups.push(`<g opacity="0">
+${inner}
+<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="0;${start};1" values="0;1;1"/>
+</g>`);
+    }
+  }
+  return groups.join("\n");
 }
 
 /**
@@ -186,37 +264,26 @@ export function buildAnimatedSvg(frames: SimulationFrame[], palette: SvgPalette)
   if (frames.length === 0) throw new Error("No frames to render");
 
   const safePalette = sanitizePalette(palette);
+  const { width: boardWidth, height: boardHeight } = getFrameBoardDimensions(frames);
+  const W = boardWidth * CELL + PAD * 2;
+  const H = boardHeight * CELL + PAD * 2;
 
   const frameDurMs = SVG_FRAME_DURATION_MS;
   const holdLastMs = SVG_HOLD_LAST_FRAME_MS;
   const n = frames.length;
   const cycleMs = n * frameDurMs + holdLastMs;
 
-  const groups: string[] = [];
-  const T = frameDurMs / cycleMs;
-  for (let i = 0; i < n; i++) {
-    const inner = frameToSvgInner(frames[i]);
-    if (i < n - 1) {
-      const start = i * T;
-      const end = (i + 1) * T;
-      groups.push(`<g opacity="0">
-${inner}
-<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="0;${start};${end};1" values="0;1;0;0"/>
-</g>`);
-    } else {
-      const start = i * T;
-      groups.push(`<g opacity="0">
-${inner}
-<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="0;${start};1" values="0;1;1"/>
-</g>`);
-    }
-  }
+  const emptyGrid = renderBaseEmptyGrid(boardWidth, boardHeight);
+  const boardAnim = renderBoardCellAnimations(frames, boardWidth, boardHeight, frameDurMs, cycleMs);
+  const activeAnim = renderActiveGroups(frames, boardWidth, boardHeight, frameDurMs, cycleMs);
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Tetrass contribution animation">
 <title>Tetrass</title>
 ${buildSymbols(safePalette)}
 <rect width="100%" height="100%" fill="${safePalette.empty}"/>
-${groups.join("\n")}
+${emptyGrid}
+${boardAnim}
+${activeAnim}
 </svg>`;
 }

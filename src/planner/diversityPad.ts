@@ -1,29 +1,43 @@
 import { applyPlacement, createEmptyBoard, isValidLock } from "../domain/board.js";
 import { BOARD_HEIGHT, type ReplayStep } from "../domain/types.js";
 
-/** Bottom band of the pad (same row index idea as `planScriptedDoubleClearIntro` O locks). */
-const DIVERSITY_PAD_Y_LOW = BOARD_HEIGHT - 2;
-/** One row above `DIVERSITY_PAD_Y_LOW` (piece bounding-box top Y). */
-const DIVERSITY_PAD_Y_HIGH = BOARD_HEIGHT - 3;
-
-/**
- * Precomputed sequence (empty board -> line clear(s) -> empty) using I, J, L.
- * Together with the all-O intro, the full prefix uses 4+ tetromino types.
- */
-const EMBEDDED_PAD: ReplayStep[] = [
-  { placement: { type: "I", rotation: 0, x: 0, y: DIVERSITY_PAD_Y_LOW } },
-  { placement: { type: "I", rotation: 0, x: 0, y: DIVERSITY_PAD_Y_HIGH } },
-  { placement: { type: "I", rotation: 0, x: 5, y: DIVERSITY_PAD_Y_LOW } },
-  { placement: { type: "J", rotation: 2, x: 7, y: DIVERSITY_PAD_Y_HIGH } },
-  { placement: { type: "L", rotation: 2, x: 4, y: DIVERSITY_PAD_Y_HIGH } },
-];
-
-export function planDiversityPadAfterIntro(): ReplayStep[] {
-  return EMBEDDED_PAD.map((step) => ({ placement: { ...step.placement } }));
+function defaultEmbeddedPad(boardHeight: number): ReplayStep[] {
+  /** Bottom band of the pad (same row index idea as `planScriptedDoubleClearIntro` O locks). */
+  const yLow = boardHeight - 2;
+  /** One row above `yLow` (piece bounding-box top Y). */
+  const yHigh = boardHeight - 3;
+  /**
+   * Precomputed sequence (empty board -> line clear(s) -> empty) using I, J, L.
+   * Together with the intro and main phases, the full replay can satisfy diversity goals.
+   */
+  return [
+    { placement: { type: "I", rotation: 0, x: 0, y: yLow } },
+    { placement: { type: "I", rotation: 0, x: 0, y: yHigh } },
+    { placement: { type: "I", rotation: 0, x: 5, y: yLow } },
+    { placement: { type: "J", rotation: 2, x: 7, y: yHigh } },
+    { placement: { type: "L", rotation: 2, x: 4, y: yHigh } },
+  ];
 }
 
-export function assertDiversityPadValid(pad: ReplayStep[]): void {
-  let b = createEmptyBoard();
+export function planDiversityPadAfterIntro(
+  boardWidth = 10,
+  boardHeight = BOARD_HEIGHT,
+): ReplayStep[] {
+  // Keep the legacy deterministic pad only for the canonical 10x20 board.
+  if (boardWidth === 10 && boardHeight === 20) {
+    return defaultEmbeddedPad(boardHeight).map((step) => ({ placement: { ...step.placement } }));
+  }
+  // Intro already guarantees line clear + mixed types for non-canonical boards.
+  return [];
+}
+
+export function assertDiversityPadValid(
+  pad: ReplayStep[],
+  boardWidth = 10,
+  boardHeight = BOARD_HEIGHT,
+): void {
+  if (pad.length === 0) return;
+  let b = createEmptyBoard(boardWidth, boardHeight);
   let clears = 0;
   const nonO = new Set<string>();
   for (const st of pad) {

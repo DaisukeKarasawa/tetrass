@@ -6,7 +6,7 @@ branding:
 
 inputs:
   github_user_name:
-    description: GitHub login whose public contribution calendar is used (same idea as Platane/snk).
+    description: GitHub login whose public contribution calendar is used (strict week-grid correspondence).
     required: true
   outputs:
     description: |

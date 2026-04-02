@@ -21,6 +21,7 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: git diff --exit-code action/index.mjs
+      - run: npx vitest run src/verify/svgFinalStateMatcher.test.ts src/generateRunner.integration.test.ts
 
       - name: Generate SVGs
         uses: ./action

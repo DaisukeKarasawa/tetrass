@@ -3,13 +3,12 @@ import {
   boardsEqual,
   cloneBoard,
   createEmptyBoard,
+  getBoardDimensions,
   isValidLock,
 } from "../domain/board.js";
 import { getCells } from "../domain/tetromino.js";
 import { iterateTypesInOrder, ROTATIONS } from "../domain/tetromino.js";
 import {
-  BOARD_HEIGHT,
-  BOARD_WIDTH,
   type Board,
   type PiecePlacement,
   type ReplayStep,
@@ -25,6 +24,8 @@ const TILING_CANDIDATE_MIN_ORIGIN_Y = -4;
 /** Cap DFS recursion volume (each `dfs()` entry counts as one visit). Scales with mask size. */
 const TILING_DFS_VISIT_BUDGET_BASE = 500_000;
 const TILING_DFS_VISIT_BUDGET_PER_GRASS_CELL = 15_000;
+/** Avoid combinatorial blow-up on large masks; rely on monomino fallback there. */
+const TILING_EXACT_COVER_MAX_GRASS_CELLS = 80;
 
 interface NormalizedShape {
   cells: [number, number][];
@@ -61,9 +62,10 @@ function countDistinctTypes(steps: ReplayStep[]): number {
 }
 
 function grassCells(board: Board): [number, number][] {
+  const { width, height } = getBoardDimensions(board);
   const out: [number, number][] = [];
-  for (let y = 0; y < BOARD_HEIGHT; y++) {
-    for (let x = 0; x < BOARD_WIDTH; x++) {
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
       if (board[y][x]) out.push([x, y]);
     }
   }
@@ -71,18 +73,19 @@ function grassCells(board: Board): [number, number][] {
 }
 
 function buildOptionsForTarget(target: Board): Map<string, PiecePlacement[]> {
+  const { width, height } = getBoardDimensions(target);
   const grass = new Set(grassCells(target).map(([x, y]) => `${x},${y}`));
   const options = new Map<string, PiecePlacement[]>();
 
   for (const type of TYPE_ORDER) {
     for (const rotation of ROTATIONS) {
       const { cells: rel, minX, minY } = normalizedShape(type, rotation);
-      for (let ax = 0; ax < BOARD_WIDTH; ax++) {
-        for (let ay = TILING_CANDIDATE_MIN_ORIGIN_Y; ay < BOARD_HEIGHT; ay++) {
+      for (let ax = 0; ax < width; ax++) {
+        for (let ay = TILING_CANDIDATE_MIN_ORIGIN_Y; ay < height; ay++) {
           const abs: [number, number][] = rel.map(([dx, dy]) => [ax + dx, ay + dy] as [number, number]);
           let ok = true;
           for (const [cx, cy] of abs) {
-            if (cx < 0 || cx >= BOARD_WIDTH || cy < 0 || cy >= BOARD_HEIGHT) {
+            if (cx < 0 || cx >= width || cy < 0 || cy >= height) {
               ok = false;
               break;
             }
@@ -113,6 +116,7 @@ function buildOptionsForTarget(target: Board): Map<string, PiecePlacement[]> {
  * during validation; the final board must exactly match the target.
  */
 function tryTile(target: Board, minDistinctTypes: number): ReplayStep[] | null {
+  const { width, height } = getBoardDimensions(target);
   const grass = grassCells(target);
   if (grass.length === 0) return minDistinctTypes === 0 ? [] : null;
   if (grass.length % 4 !== 0) return null;
@@ -160,7 +164,7 @@ function tryTile(target: Board, minDistinctTypes: number): ReplayStep[] | null {
       if (keys.some((k) => filled.has(k))) continue;
       let allGrass = true;
       for (const [cx, cy] of cells) {
-        if (cx < 0 || cx >= BOARD_WIDTH || cy < 0 || cy >= BOARD_HEIGHT || !target[cy][cx]) {
+        if (cx < 0 || cx >= width || cy < 0 || cy >= height || !target[cy][cx]) {
           allGrass = false;
           break;
         }
@@ -192,7 +196,7 @@ function tryTile(target: Board, minDistinctTypes: number): ReplayStep[] | null {
     return a.rotation - b.rotation;
   });
 
-  const board = createEmptyBoard();
+  const board = createEmptyBoard(width, height);
   for (const p of ordered) {
     if (!isValidLock(board, p)) return null;
     applyPlacementNoClear(board, p);
@@ -226,6 +230,7 @@ function mergeAndValidate(
   tetrominoSteps: ReplayStep[],
   monoSteps: ReplayStep[],
 ): ReplayStep[] | null {
+  const { width, height } = getBoardDimensions(target);
   const allSteps = [...tetrominoSteps, ...monoSteps];
 
   // Sort by bottom cell of each piece (highest y first = bottom-up placement order).
@@ -239,7 +244,7 @@ function mergeAndValidate(
     return 0;
   });
 
-  const board = createEmptyBoard();
+  const board = createEmptyBoard(width, height);
   for (const step of allSteps) {
     if (!isValidLock(board, step.placement)) return null;
     applyPlacementNoClear(board, step.placement);
@@ -271,8 +276,13 @@ export function tileTargetWithTrimming(
     return { steps: [], trimmedBoard: cloneBoard(target), trimmedCells: 0 };
   }
 
+  const width = target[0]?.length ?? 0;
+  const height = target.length;
+  const mayUseExactCover =
+    width >= 8 && height >= 8 && allGrass.length <= TILING_EXACT_COVER_MAX_GRASS_CELLS;
+
   // --- Fast path: pure tetromino tiling ---
-  if (allGrass.length % 4 === 0) {
+  if (mayUseExactCover && allGrass.length % 4 === 0) {
     const steps = tryTile(target, minDistinctTypes);
     if (steps) {
       return { steps, trimmedBoard: cloneBoard(target), trimmedCells: 0 };
@@ -298,6 +308,7 @@ export function tileTargetWithTrimming(
     if (remCount === 0) break;
     if (remCount % 4 !== 0) continue;
 
+    if (!mayUseExactCover || remCount > TILING_EXACT_COVER_MAX_GRASS_CELLS) continue;
     const tetrominoSteps = tryTile(reduced, 0);
     if (!tetrominoSteps || tetrominoSteps.length === 0) continue;
 
@@ -325,7 +336,7 @@ export function tileTargetWithTrimming(
     );
   }
 
-  const board = createEmptyBoard();
+  const board = createEmptyBoard(width, height);
   for (const step of allMonoSteps) {
     if (!isValidLock(board, step.placement)) {
       throw new Error("Internal error: monomino lock validation failed.");

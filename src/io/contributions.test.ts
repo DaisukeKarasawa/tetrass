@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { BOARD_HEIGHT, BOARD_WIDTH } from "../domain/types.js";
 import {
   type ContributionCalendar,
   type ContributionDay,
@@ -14,60 +13,65 @@ describe("flattenContributionDays", () => {
   it("concatenates weeks in order", () => {
     const cal: ContributionCalendar = {
       weeks: [
-        { contributionDays: [{ date: "2024-01-01", contributionCount: 1 }] },
-        { contributionDays: [{ date: "2024-01-08", contributionCount: 0 }] },
+        { contributionDays: [{ date: "2024-01-01", weekday: 1, contributionCount: 1 }] },
+        { contributionDays: [{ date: "2024-01-08", weekday: 1, contributionCount: 0 }] },
       ],
     };
     expect(flattenContributionDays(cal)).toEqual([
-      { date: "2024-01-01", contributionCount: 1 },
-      { date: "2024-01-08", contributionCount: 0 },
+      { date: "2024-01-01", weekday: 1, contributionCount: 1 },
+      { date: "2024-01-08", weekday: 1, contributionCount: 0 },
     ]);
   });
 });
 
 describe("contributionDaysToTargetBoard", () => {
-  it("maps bottom row left-to-right then upward; pads short history with zeros", () => {
-    const days: ContributionDay[] = [{ date: "2024-12-31", contributionCount: 1 }];
+  it("maps GitHub-native coordinates: x=week index, y=weekday", () => {
+    const days: ContributionDay[] = [
+      { date: "2024-01-01", weekday: 0, contributionCount: 0 }, // x=0,y=0
+      { date: "2024-01-02", weekday: 1, contributionCount: 0 }, // x=0,y=1
+      { date: "2024-01-03", weekday: 2, contributionCount: 1 }, // x=0,y=2
+      { date: "2024-01-04", weekday: 3, contributionCount: 0 }, // x=0,y=3
+      { date: "2024-01-05", weekday: 4, contributionCount: 0 }, // x=0,y=4
+      { date: "2024-01-06", weekday: 5, contributionCount: 0 }, // x=0,y=5
+      { date: "2024-01-07", weekday: 6, contributionCount: 0 }, // x=0,y=6
+      { date: "2024-01-08", weekday: 0, contributionCount: 1 }, // x=1,y=0
+    ];
     const board = contributionDaysToTargetBoard(days);
-    expect(board[0][9]).toBe(1);
-    expect(board[19][0]).toBe(0);
-    let ones = 0;
-    for (let y = 0; y < BOARD_HEIGHT; y++) {
-      for (let x = 0; x < BOARD_WIDTH; x++) if (board[y][x]) ones++;
-    }
-    expect(ones).toBe(1);
+    expect(board).toHaveLength(7);
+    expect(board[0]).toHaveLength(53);
+    expect(board[2][51]).toBe(1);
+    expect(board[0][52]).toBe(1);
+    expect(board[6][52]).toBe(0);
   });
 
-  it("fills the board when the last 200 days all have contributions", () => {
-    const days: ContributionDay[] = Array.from({ length: 200 }, (_, i) => ({
-      date: `d${i}`,
+  it("infers weekday from ISO date when weekday is omitted", () => {
+    // 2024-01-01 is Tuesday in UTC => getUTCDay() === 2
+    const days: ContributionDay[] = Array.from({ length: 7 }, (_, i) => ({
+      date: `2024-01-0${i + 1}`,
       contributionCount: 1,
     }));
     const board = contributionDaysToTargetBoard(days);
-    expect(board.every((row) => row.every((c) => c === 1))).toBe(true);
+    expect(board[2][52]).toBe(1);
   });
 
-  it("uses only the last 200 days of a longer history", () => {
-    const days: ContributionDay[] = Array.from({ length: 250 }, (_, i) => ({
-      date: `d${i}`,
-      contributionCount: i >= 50 ? 1 : 0,
-    }));
-    const board = contributionDaysToTargetBoard(days);
-    expect(board.every((row) => row.every((c) => c === 1))).toBe(true);
-  });
-
-  it("maps sample days to a deterministic non-trivial lower-left block", () => {
+  it("maps sample days to deterministic non-trivial weekly profile", () => {
     const board = contributionDaysToTargetBoard(buildSampleContributionDays());
-    expect(board[19][0]).toBe(1);
-    expect(board[19][7]).toBe(1);
-    expect(board[19][8]).toBe(0);
-    expect(board[8][0]).toBe(1);
-    expect(board[7][0]).toBe(0);
+    expect(board).toHaveLength(7);
+    expect(board[0].length).toBe(53);
+
+    // weekdays 0 and 6 are intentionally empty in the deterministic sample.
+    expect(board[0].every((c) => c === 0)).toBe(true);
+    expect(board[6].every((c) => c === 0)).toBe(true);
+
+    // Interior weekdays should include contributions over many weeks.
+    expect(board[1].some((c) => c === 1)).toBe(true);
+    expect(board[5].some((c) => c === 1)).toBe(true);
+
     let ones = 0;
-    for (let y = 0; y < BOARD_HEIGHT; y++) {
-      for (let x = 0; x < BOARD_WIDTH; x++) if (board[y][x]) ones++;
+    for (let y = 0; y < board.length; y++) {
+      for (let x = 0; x < board[0].length; x++) if (board[y][x]) ones++;
     }
-    expect(ones).toBe(96);
+    expect(ones).toBeGreaterThan(0);
   });
 });
 

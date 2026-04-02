@@ -16,9 +16,11 @@ const SPAWN_ROWS_ABOVE_LOCK = 24;
 const MAX_SOFT_DROP_SAMPLE_STEPS = 8;
 
 function placementFits(board: Board, cells: [number, number][]): boolean {
+  const height = board.length;
+  const width = height > 0 ? board[0].length : 0;
   for (const [cx, cy] of cells) {
-    if (cx < 0 || cx >= BOARD_WIDTH) return false;
-    if (cy >= BOARD_HEIGHT) return false;
+    if (cx < 0 || cx >= width) return false;
+    if (cy >= height) return false;
     if (cy >= 0 && board[cy][cx] === 1) return false;
   }
   return true;
@@ -100,7 +102,7 @@ function appendPreLockDropFrames(frames: SimulationFrame[], board: Board, lock: 
  * from above cannot reach the script lock (slide/tuck), frames fall back to spawn + lock pose instead of throwing.
  */
 export function simulateReplayForFrames(script: ReplayScript): SimulationResult {
-  const board = createEmptyBoard();
+  const board = createEmptyBoard(script.boardWidth ?? BOARD_WIDTH, script.boardHeight ?? BOARD_HEIGHT);
   const frames: SimulationFrame[] = [];
   let totalLineClears = 0;
   const usedTypes = new Set<TetrominoType>();
@@ -136,7 +138,7 @@ export function simulateReplayForFrames(script: ReplayScript): SimulationResult 
 
 /** Fast path: apply script without per-frame expansion (verification). */
 export function simulateReplayFast(script: ReplayScript): SimulationResult {
-  const board = createEmptyBoard();
+  const board = createEmptyBoard(script.boardWidth ?? BOARD_WIDTH, script.boardHeight ?? BOARD_HEIGHT);
   let totalLineClears = 0;
   const usedTypes = new Set<TetrominoType>();
   for (const step of script.steps) {

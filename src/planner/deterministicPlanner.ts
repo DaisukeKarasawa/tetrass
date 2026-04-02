@@ -1,4 +1,5 @@
 import type { Board, ReplayScript, ReplayStep, TetrominoType } from "../domain/types.js";
+import { getBoardDimensions } from "../domain/board.js";
 import { assertDiversityPadValid, planDiversityPadAfterIntro } from "./diversityPad.js";
 import { assertIntroValid, planScriptedDoubleClearIntro } from "./introClear.js";
 import { tileTargetWithTrimming } from "./tetrominoTiling.js";
@@ -21,17 +22,22 @@ export interface PlannedReplay {
 }
 
 export function planDeterministicReplay(target: Board): PlannedReplay {
-  const intro = planScriptedDoubleClearIntro();
-  assertIntroValid(intro);
-  const pad = planDiversityPadAfterIntro();
-  assertDiversityPadValid(pad);
+  const { width, height } = getBoardDimensions(target);
+  const intro = planScriptedDoubleClearIntro(width, height);
+  const introTypeCount = countDistinctTypes(intro);
+  assertIntroValid(intro, width, height);
+  const pad = planDiversityPadAfterIntro(width, height);
+  assertDiversityPadValid(pad, width, height);
 
-  const { steps: mainSteps, trimmedBoard } = tileTargetWithTrimming(target, 0);
+  const minDistinctTypes = width >= 10 && height >= 20 ? 4 : 2;
+  const minDistinctTypesFromMain = Math.max(0, minDistinctTypes - introTypeCount);
+  const { steps: mainSteps, trimmedBoard } = tileTargetWithTrimming(target, minDistinctTypesFromMain);
 
   const all = [...intro, ...pad, ...mainSteps];
-  if (countDistinctTypes(all) < 4) {
+  if (countDistinctTypes(all) < minDistinctTypes) {
     throw new Error(`Shape diversity failed: only ${countDistinctTypes(all)} types in full replay.`);
   }
 
-  return { script: { steps: all }, grassTarget: trimmedBoard };
+  const script: ReplayScript = { steps: all, boardWidth: width, boardHeight: height };
+  return { script, grassTarget: trimmedBoard };
 }

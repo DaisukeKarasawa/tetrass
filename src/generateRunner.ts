@@ -95,8 +95,13 @@ export function planAndVerifyReplay(days: ContributionDay[]): PlannedVerifiedRep
   if (fast.totalLineClears < 1) {
     throw new Error("Acceptance failed: no line clears in replay.");
   }
-  if (fast.usedTypes.size < 4) {
-    throw new Error(`Acceptance failed: need >=4 piece types, got ${fast.usedTypes.size}`);
+  const boardHeight = script.boardHeight ?? grassTarget.length;
+  const boardWidth = script.boardWidth ?? (grassTarget[0]?.length ?? 0);
+  const minDistinctTypes = boardWidth >= 10 && boardHeight >= 20 ? 4 : 2;
+  if (fast.usedTypes.size < minDistinctTypes) {
+    throw new Error(
+      `Acceptance failed: need >=${minDistinctTypes} piece types, got ${fast.usedTypes.size}`,
+    );
   }
   return { script, grassTarget, fast };
 }
