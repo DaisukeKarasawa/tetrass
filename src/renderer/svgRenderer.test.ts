@@ -3,7 +3,21 @@ import { describe, expect, it } from "vitest";
 import { GRID_VISIBLE_WEEKS, GRID_WEEKDAYS } from "../domain/grass.js";
 import { buildDropSchedule, splitBoardIntoColumnGroups } from "../grass/groupDropPlanner.js";
 import { buildSampleContributionDays, contributionDaysToLevelBoard } from "../io/contributions.js";
-import { buildGrassDropSvg, PALETTE_DARK, PALETTE_LIGHT, sanitizeGrassPalette, validateColor } from "./svgRenderer.js";
+import {
+  buildGrassDropSvg,
+  PALETTE_DARK,
+  PALETTE_LIGHT,
+  sanitizeGrassPalette,
+  smilDropKeyTimesForTest,
+  validateColor,
+} from "./svgRenderer.js";
+
+function expectStrictIncreasingKeyTimes(kt: string): void {
+  const parts = kt.split(";").map(Number);
+  for (let i = 1; i < parts.length; i++) {
+    expect(parts[i]).toBeGreaterThan(parts[i - 1]!);
+  }
+}
 
 describe("validateColor / sanitizeGrassPalette", () => {
   it("rejects injectiony palette strings", () => {
@@ -72,5 +86,12 @@ describe("buildGrassDropSvg", () => {
     const segments = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
     const svg = buildGrassDropSvg(segments, PALETTE_DARK);
     expect(svg).not.toMatch(/keyTimes="0;0\.0+/);
+  });
+
+  it("keeps smil keyTimes strictly increasing after toFixed(6) when raw b nears 1 or exceeds rTail", () => {
+    expectStrictIncreasingKeyTimes(smilDropKeyTimesForTest(0, 420, 420));
+    expectStrictIncreasingKeyTimes(smilDropKeyTimesForTest(0, 420, 421));
+    expectStrictIncreasingKeyTimes(smilDropKeyTimesForTest(40, 60, 100));
+    expectStrictIncreasingKeyTimes(smilDropKeyTimesForTest(1, 499, 500));
   });
 });

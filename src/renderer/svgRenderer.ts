@@ -137,6 +137,52 @@ const PAD = 2;
 const RX = 2;
 /** Fraction of cycle used to snap back to the initial state before repeat. */
 const CYCLE_TAIL_RESET = 0.0012;
+/**
+ * Minimum spacing between consecutive normalized keyTimes so `toFixed(6)` stays strictly increasing
+ * (SMIL requires strictly monotonic keyTimes).
+ */
+const SMIL_KEY_GAP = 2e-6;
+
+type SmilKeyframeFrac =
+  | { mode: "zero"; b: number; r: number }
+  | { mode: "off"; a: number; b: number; r: number };
+
+/** Normalize drop endpoints so `0 < b < r < 1` (or `0 < a < b < r < 1`) before formatting. */
+function clampSmilKeyframeFractions(
+  startMs: number,
+  dropDurationMs: number,
+  cycleMs: number,
+): SmilKeyframeFrac {
+  const cycle = Math.max(1, cycleMs);
+  const g = SMIL_KEY_GAP;
+
+  const rTail = Math.max(0, 1 - CYCLE_TAIL_RESET);
+  const bRaw = (startMs + dropDurationMs) / cycle;
+  const aRaw = startMs / cycle;
+
+  if (aRaw <= Number.EPSILON) {
+    let b = Math.min(bRaw, rTail - g);
+    b = Math.max(b, g);
+    let r = Math.max(rTail, b + g);
+    r = Math.min(r, 1 - g);
+    return { mode: "zero", b, r };
+  }
+
+  let a = Math.min(aRaw, rTail - 3 * g);
+  a = Math.max(a, g);
+  let b = Math.min(bRaw, rTail - g);
+  b = Math.max(b, a + g);
+  let r = Math.max(rTail, b + g);
+  r = Math.min(r, 1 - g);
+
+  if (!(a < b && b < r)) {
+    a = g;
+    b = 3 * g;
+    r = 1 - g;
+  }
+
+  return { mode: "off", a, b, r };
+}
 
 function cellPx(x: number, y: number): { px: number; py: number } {
   return { px: PAD + x * step, py: PAD + y * step };
@@ -171,22 +217,25 @@ function smilDropTimeline(
   cycleMs: number,
   fallPx: number,
 ): { keyTimes: string; translateValues: string; opValues: string } {
-  const a = startMs / cycleMs;
-  const b = (startMs + dropDurationMs) / cycleMs;
-  const r = Math.max(0, 1 - CYCLE_TAIL_RESET);
+  const k = clampSmilKeyframeFractions(startMs, dropDurationMs, cycleMs);
   const fmt = (t: number): string => t.toFixed(6);
-  if (a <= Number.EPSILON) {
+  if (k.mode === "zero") {
     return {
-      keyTimes: `0;${fmt(b)};${fmt(r)};1`,
+      keyTimes: `0;${fmt(k.b)};${fmt(k.r)};1`,
       translateValues: `0,-${fallPx};0,0;0,0;0,-${fallPx}`,
       opValues: `1;1;0;0`,
     };
   }
   return {
-    keyTimes: `0;${fmt(a)};${fmt(b)};${fmt(r)};1`,
+    keyTimes: `0;${fmt(k.a)};${fmt(k.b)};${fmt(k.r)};1`,
     translateValues: `0,-${fallPx};0,-${fallPx};0,0;0,0;0,-${fallPx}`,
     opValues: `0;1;1;0;0`,
   };
+}
+
+/** Exposed for unit tests: normalized SMIL keyTimes for one drop segment. */
+export function smilDropKeyTimesForTest(startMs: number, dropDurationMs: number, cycleMs: number): string {
+  return smilDropTimeline(startMs, dropDurationMs, cycleMs, 0).keyTimes;
 }
 
 function renderEmptyGrid(): string {
