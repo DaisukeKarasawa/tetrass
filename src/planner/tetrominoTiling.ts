@@ -278,8 +278,11 @@ export function tileTargetWithTrimming(
 
   const width = target[0]?.length ?? 0;
   const height = target.length;
+  // Board-level shape gating (dimension check) is separate from mask-size gating.
+  const boardCanUseExactCover = width >= 8 || height >= 8;
+  // For the fast path on the original target, also require the initial mask to be within the size cap.
   const mayUseExactCover =
-    (width >= 8 || height >= 8) && allGrass.length <= TILING_EXACT_COVER_MAX_GRASS_CELLS;
+    boardCanUseExactCover && allGrass.length <= TILING_EXACT_COVER_MAX_GRASS_CELLS;
 
   // --- Fast path: pure tetromino tiling ---
   if (mayUseExactCover && allGrass.length % 4 === 0) {
@@ -308,7 +311,9 @@ export function tileTargetWithTrimming(
     if (remCount === 0) break;
     if (remCount % 4 !== 0) continue;
 
-    if (!mayUseExactCover || remCount > TILING_EXACT_COVER_MAX_GRASS_CELLS) continue;
+    // On reduced masks, allow exact-cover attempts as soon as the remainder is within the size cap,
+    // provided the board shape allows it.
+    if (!boardCanUseExactCover || remCount > TILING_EXACT_COVER_MAX_GRASS_CELLS) continue;
     const tetrominoSteps = tryTile(reduced, 0);
     if (!tetrominoSteps || tetrominoSteps.length === 0) continue;
 
