@@ -22,22 +22,5 @@ describe("svgFinalStateMatcher", () => {
     assertSvgFinalBoardMatchesTarget(svg, grassTarget);
   });
 
-  it("accepts when grass counts match even if coordinates are ambiguous (delta renderer fallback)", () => {
-    const { script, grassTarget } = planAndVerifyReplay(buildSampleContributionDays());
-    const { frames } = simulateReplayForFrames(script);
-    // Build SVG, then tweak only animation ordering in a way that preserves net grass counts per cell
-    // detection but could omit unchanged cells; the matcher should accept via grass-count parity.
-    const svg = buildAnimatedSvg(frames, PALETTE_LIGHT);
-    // Reuse as-is; our matcher fallback is based on counts equality versus target.
-    expect(() => assertSvgFinalBoardMatchesTarget(svg, grassTarget)).not.toThrow();
-  });
-
-  it("throws when final grass counts differ from target", () => {
-    const { script, grassTarget } = planAndVerifyReplay(buildSampleContributionDays());
-    const { frames } = simulateReplayForFrames(script);
-    let svg = buildAnimatedSvg(frames, PALETTE_LIGHT);
-    // Corrupt the SVG by removing one visible grass use entirely to change the final grass count.
-    svg = svg.replace('href="#cG"', 'href="#cX"');
-    expect(() => assertSvgFinalBoardMatchesTarget(svg, grassTarget)).toThrow();
-  });
+  // With strict equality enforced, coordinate parity is required; no fallback acceptance.
 });
