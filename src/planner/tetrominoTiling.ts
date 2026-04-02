@@ -278,12 +278,11 @@ export function tileTargetWithTrimming(
 
   const width = target[0]?.length ?? 0;
   const height = target.length;
-  // Dimension gating: allow exact-cover DFS on boards with at least one large dimension.
-  // Size gating: apply at call sites so reduced subproblems can be attempted as the mask shrinks.
-  const dimensionOk = width >= 8 || height >= 8;
+  const mayUseExactCover =
+    width >= 8 && height >= 8 && allGrass.length <= TILING_EXACT_COVER_MAX_GRASS_CELLS;
 
   // --- Fast path: pure tetromino tiling ---
-  if (dimensionOk && allGrass.length % 4 === 0 && allGrass.length <= TILING_EXACT_COVER_MAX_GRASS_CELLS) {
+  if (mayUseExactCover && allGrass.length % 4 === 0) {
     const steps = tryTile(target, minDistinctTypes);
     if (steps) {
       return { steps, trimmedBoard: cloneBoard(target), trimmedCells: 0 };
@@ -309,7 +308,7 @@ export function tileTargetWithTrimming(
     if (remCount === 0) break;
     if (remCount % 4 !== 0) continue;
 
-    if (!dimensionOk || remCount > TILING_EXACT_COVER_MAX_GRASS_CELLS) continue;
+    if (!mayUseExactCover || remCount > TILING_EXACT_COVER_MAX_GRASS_CELLS) continue;
     const tetrominoSteps = tryTile(reduced, 0);
     if (!tetrominoSteps || tetrominoSteps.length === 0) continue;
 
