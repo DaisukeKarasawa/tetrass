@@ -42,7 +42,7 @@ describe("runTetrassGenerate / unauthenticated fetch failure", () => {
         useSample: false,
         allowUnauthenticatedFallback: true,
       }),
-    ).resolves.toBeUndefined({ timeout: 60_000 } as unknown as number);
+    ).resolves.toBeUndefined();
     await rm(dir, { recursive: true, force: true });
-  });
+  }, 60000);
 });

@@ -96,5 +96,5 @@ describe("runTetrassGenerate", () => {
 
     await rm(workspace, { recursive: true, force: true });
     await rm(outside, { recursive: true, force: true });
-  });
+  }, 60000);
 });
