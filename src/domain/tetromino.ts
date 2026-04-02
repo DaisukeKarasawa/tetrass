@@ -44,6 +44,12 @@ const SHAPES: Record<TetrominoType, readonly (readonly (readonly [number, number
     [[0, 1], [1, 1], [2, 1], [0, 2]],
     [[0, 0], [1, 0], [1, 1], [1, 2]],
   ],
+  M: [
+    [[0, 0]],
+    [[0, 0]],
+    [[0, 0]],
+    [[0, 0]],
+  ],
 };
 
 const TYPE_ORDER: TetrominoType[] = ["I", "O", "T", "S", "Z", "J", "L"];
