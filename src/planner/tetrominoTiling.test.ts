@@ -1,9 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import { createEmptyBoard } from "../domain/board.js";
-import type { Board } from "../domain/types.js";
+import type { Board, TetrominoType } from "../domain/types.js";
 import { BOARD_HEIGHT, BOARD_WIDTH } from "../domain/types.js";
 import { simulateReplayFast } from "../simulator/simulateReplay.js";
+import { planDeterministicReplay } from "./deterministicPlanner.js";
 import { tileTargetWithTrimming } from "./tetrominoTiling.js";
 
 function boardFromCoords(coords: Array<[number, number]>): Board {
@@ -101,5 +102,33 @@ describe("tileTargetWithTrimming", () => {
     const replay = simulateReplayFast({ steps });
     expect(replay.finalBoard).toEqual(trimmedBoard);
     expect(trimmedBoard).toEqual(target);
+  });
+
+  it("full deterministic replay has line clears >= 1, piece types >= 4, and final board == target", () => {
+    // Use a target that is tileable by tetrominoes (8 cells = 2 O-pieces).
+    const target = boardFromCoords([
+      [0, 18],
+      [1, 18],
+      [0, 19],
+      [1, 19],
+      [2, 18],
+      [3, 18],
+      [2, 19],
+      [3, 19],
+    ]);
+    const { script, grassTarget } = planDeterministicReplay(target);
+    const replay = simulateReplayFast(script);
+
+    // Invariant 1: final board equals grassTarget (which equals original target).
+    expect(replay.finalBoard).toEqual(grassTarget);
+    expect(grassTarget).toEqual(target);
+
+    // Invariant 2: at least 1 line clear (from intro/diversity phases).
+    expect(replay.totalLineClears).toBeGreaterThanOrEqual(1);
+
+    // Invariant 3: at least 4 distinct piece types used across the full replay.
+    const types = new Set<TetrominoType>();
+    for (const step of script.steps) types.add(step.placement.type);
+    expect(types.size).toBeGreaterThanOrEqual(4);
   });
 });

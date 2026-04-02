@@ -313,6 +313,9 @@ export function tileTargetWithTrimming(
 
   const board = createEmptyBoard();
   for (const step of allMonoSteps) {
+    if (!isValidLock(board, step.placement)) {
+      throw new Error("Internal error: monomino lock validation failed.");
+    }
     applyPlacementNoClear(board, step.placement);
   }
   if (!boardsEqual(board, target)) {
