@@ -92,6 +92,19 @@ Offline / CI without API:
 TETRASS_USE_SAMPLE=1 npm run generate:tetrass
 ```
 
+Sample/offline mode uses a deterministic non-trivial board profile (not a single tetromino) so output remains visually meaningful.
+
+### Retention guard (to avoid tiny misleading output)
+
+For non-trivial contribution masks, Tetrass now enforces a minimum retained-grass ratio after deterministic trimming.  
+If a mask can only be tiled by discarding too much grass, generation fails with an explicit error such as:
+
+```text
+Cannot tile contribution mask with acceptable retention: kept X/Y cells (...) below required ...%.
+```
+
+This is intentional: the tool prefers failing clearly over silently producing an almost-empty animation.
+
 CLI-only: if you intentionally run without `GITHUB_TOKEN` and want a deterministic sample when the public GraphQL request fails, set `TETRASS_ALLOW_UNAUTH_FALLBACK=1` (not recommended for workflows that should reflect real contributions).
 
 ## CodeRabbit review operations (for this repo)

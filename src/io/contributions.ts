@@ -132,6 +132,13 @@ export function buildSampleContributionDays(): ContributionDay[] {
   const start = new Date("2024-01-01T00:00:00Z");
   /** Last `CELLS` days map into the playfield; earlier days are ignored by `contributionDaysToTargetBoard`. */
   const tailStart = SAMPLE_CONTRIBUTION_DAY_COUNT - CELLS;
+  /**
+   * Deterministic "grass" profile for sample mode:
+   * - Occupy columns 0..7 on rows 8..19 (96 cells total)
+   * - Avoid full 10-cell rows so replay does not collapse via line clears
+   * - Keep a visibly non-trivial animation when users run without API access
+   */
+  const sampleGrassCell = (x: number, y: number): boolean => x <= 7 && y >= 8;
   for (let i = 0; i < SAMPLE_CONTRIBUTION_DAY_COUNT; i++) {
     const d = new Date(start);
     d.setUTCDate(start.getUTCDate() + i);
@@ -139,8 +146,9 @@ export function buildSampleContributionDays(): ContributionDay[] {
     let contributionCount = 0;
     if (i >= tailStart) {
       const idxInSlice = i - tailStart;
-      // Bottom-left O-tetromino on the board: slice indices 0,1,10,11 -> (0,19),(1,19),(0,18),(1,18).
-      if (idxInSlice === 0 || idxInSlice === 1 || idxInSlice === 10 || idxInSlice === 11) {
+      const x = idxInSlice % BOARD_WIDTH;
+      const y = BOARD_HEIGHT - 1 - Math.floor(idxInSlice / BOARD_WIDTH);
+      if (sampleGrassCell(x, y)) {
         contributionCount = 1;
       }
     }

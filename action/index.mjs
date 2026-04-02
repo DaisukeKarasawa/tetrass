@@ -102,6 +102,7 @@ function buildSampleContributionDays() {
   const days = [];
   const start = /* @__PURE__ */ new Date("2024-01-01T00:00:00Z");
   const tailStart = SAMPLE_CONTRIBUTION_DAY_COUNT - CELLS;
+  const sampleGrassCell = (x, y) => x <= 7 && y >= 8;
   for (let i = 0; i < SAMPLE_CONTRIBUTION_DAY_COUNT; i++) {
     const d = new Date(start);
     d.setUTCDate(start.getUTCDate() + i);
@@ -109,7 +110,9 @@ function buildSampleContributionDays() {
     let contributionCount = 0;
     if (i >= tailStart) {
       const idxInSlice = i - tailStart;
-      if (idxInSlice === 0 || idxInSlice === 1 || idxInSlice === 10 || idxInSlice === 11) {
+      const x = idxInSlice % BOARD_WIDTH;
+      const y = BOARD_HEIGHT - 1 - Math.floor(idxInSlice / BOARD_WIDTH);
+      if (sampleGrassCell(x, y)) {
         contributionCount = 1;
       }
     }
@@ -317,6 +320,8 @@ function normalizedShape(type, rotation) {
     minY
   };
 }
+var MIN_TRIMMED_RETAIN_RATIO = 0.6;
+var MIN_GRASS_FOR_RETAIN_RATIO_GUARD = 20;
 function grassCells(board) {
   const out = [];
   for (let y = 0; y < BOARD_HEIGHT; y++) {
@@ -452,6 +457,16 @@ function tileTargetWithTrimming(target, minDistinctTypes) {
         throw new Error(
           "Cannot tile the contribution mask without discarding all grass cells. The playfield may be too dense or irregular to pack with tetrominoes; try a sparser contribution grid."
         );
+      }
+      if (initialGrassCells >= MIN_GRASS_FOR_RETAIN_RATIO_GUARD) {
+        const retainRatio = remainingGrass / initialGrassCells;
+        if (retainRatio < MIN_TRIMMED_RETAIN_RATIO) {
+          const retainPct = (retainRatio * 100).toFixed(1);
+          const minPct = (MIN_TRIMMED_RETAIN_RATIO * 100).toFixed(1);
+          throw new Error(
+            `Cannot tile contribution mask with acceptable retention: kept ${remainingGrass}/${initialGrassCells} cells (${retainPct}%), below required ${minPct}%.`
+          );
+        }
       }
       return { steps, trimmedBoard: trimmed, trimmedCells };
     }

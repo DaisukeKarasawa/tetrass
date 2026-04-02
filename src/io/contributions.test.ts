@@ -56,17 +56,18 @@ describe("contributionDaysToTargetBoard", () => {
     expect(board.every((row) => row.every((c) => c === 1))).toBe(true);
   });
 
-  it("maps sample days to a small tileable O-shaped grass cluster at the bottom-left", () => {
+  it("maps sample days to a deterministic non-trivial lower-left block", () => {
     const board = contributionDaysToTargetBoard(buildSampleContributionDays());
     expect(board[19][0]).toBe(1);
-    expect(board[19][1]).toBe(1);
-    expect(board[18][0]).toBe(1);
-    expect(board[18][1]).toBe(1);
+    expect(board[19][7]).toBe(1);
+    expect(board[19][8]).toBe(0);
+    expect(board[8][0]).toBe(1);
+    expect(board[7][0]).toBe(0);
     let ones = 0;
     for (let y = 0; y < BOARD_HEIGHT; y++) {
       for (let x = 0; x < BOARD_WIDTH; x++) if (board[y][x]) ones++;
     }
-    expect(ones).toBe(4);
+    expect(ones).toBe(96);
   });
 });
 

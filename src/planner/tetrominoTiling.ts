@@ -53,6 +53,11 @@ export interface TilingResult {
   trimmedCells: number;
 }
 
+/** Minimum retained fraction of original grass for successful tiling on non-trivial masks. */
+const MIN_TRIMMED_RETAIN_RATIO = 0.6;
+/** Below this original grass count, ratio guard is skipped to avoid rejecting sparse profiles. */
+const MIN_GRASS_FOR_RETAIN_RATIO_GUARD = 20;
+
 function grassCells(board: Board): [number, number][] {
   const out: [number, number][] = [];
   for (let y = 0; y < BOARD_HEIGHT; y++) {
@@ -215,6 +220,16 @@ export function tileTargetWithTrimming(
         throw new Error(
           "Cannot tile the contribution mask without discarding all grass cells. The playfield may be too dense or irregular to pack with tetrominoes; try a sparser contribution grid.",
         );
+      }
+      if (initialGrassCells >= MIN_GRASS_FOR_RETAIN_RATIO_GUARD) {
+        const retainRatio = remainingGrass / initialGrassCells;
+        if (retainRatio < MIN_TRIMMED_RETAIN_RATIO) {
+          const retainPct = (retainRatio * 100).toFixed(1);
+          const minPct = (MIN_TRIMMED_RETAIN_RATIO * 100).toFixed(1);
+          throw new Error(
+            `Cannot tile contribution mask with acceptable retention: kept ${remainingGrass}/${initialGrassCells} cells (${retainPct}%), below required ${minPct}%.`,
+          );
+        }
       }
       return { steps, trimmedBoard: trimmed, trimmedCells };
     }
