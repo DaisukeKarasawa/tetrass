@@ -23,8 +23,11 @@ export function planDiversityPadAfterIntro(
   boardWidth = 10,
   boardHeight = BOARD_HEIGHT,
 ): ReplayStep[] {
-  // Keep the legacy deterministic pad only for the canonical 10x20 board.
-  if (boardWidth === 10 && boardHeight === 20) {
+  // Use the deterministic diversity pad on sufficiently large boards.
+  // Requirements:
+  // - width >= 10 so fixed x positions fit safely
+  // - height >= 3 so yHigh/yLow rows exist
+  if (boardWidth >= 10 && boardHeight >= 3) {
     return defaultEmbeddedPad(boardHeight).map((step) => ({ placement: { ...step.placement } }));
   }
   // Intro already guarantees line clear + mixed types for non-canonical boards.
