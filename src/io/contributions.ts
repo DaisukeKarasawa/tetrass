@@ -153,18 +153,23 @@ export function buildSampleContributionDays(): ContributionDay[] {
   const sampleWeeks = Math.ceil(SAMPLE_CONTRIBUTION_DAY_COUNT / GITHUB_WEEKDAYS);
   /**
    * Deterministic "grass" profile for sample mode:
-   * - Occupy weekdays 1..5 for weeks 6..(sampleWeeks-4)
-   * - Avoid full rows so replay does not collapse via line clears
+   * - Keep a visibly non-trivial animation when users run without API access
+   * - Occupy a compact, exact-cover-friendly rectangle near the right edge of the
+   *   53-week viewport so tiling can engage and use multiple tetromino types.
+   *   Specifically, use the last 16 weeks and weekdays 1..5 => 16*5 = 80 cells.
+   *   (80 is <= TILING_EXACT_COVER_MAX_GRASS_CELLS and divisible by 4.)
    * - Keep a visibly non-trivial animation when users run without API access
    */
-  const sampleGrassCell = (week: number, weekday: number): boolean =>
-    week >= 6 && week <= sampleWeeks - 4 && weekday >= 1 && weekday <= 5;
+  const sampleGrassCell = (week: number, weekday: number): boolean => {
+    const last16Start = Math.max(0, sampleWeeks - 16);
+    return week >= last16Start && weekday >= 1 && weekday <= 5;
+  };
   for (let i = 0; i < SAMPLE_CONTRIBUTION_DAY_COUNT; i++) {
     const d = new Date(start);
     d.setUTCDate(start.getUTCDate() + i);
     const date = d.toISOString().slice(0, 10);
     const week = Math.floor(i / GITHUB_WEEKDAYS);
-    const weekday = i % GITHUB_WEEKDAYS;
+    const weekday = d.getUTCDay();
     const contributionCount = sampleGrassCell(week, weekday) ? 1 : 0;
     days.push({ date, weekday, contributionCount });
   }
