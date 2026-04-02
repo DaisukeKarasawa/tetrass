@@ -11,11 +11,12 @@ function countDistinctTypes(steps: ReplayStep[]): number {
 
 /**
  * Deterministic replay: O intro (line clears) + diversity pad (>=3 non-O types, line clear, back to empty)
- * + exact tetromino tiling of grass. If the raw mask is not tileable, trim grass from the top until tileable.
+ * + tetromino/monomino tiling of grass. Single cells that cannot be covered by tetrominoes are placed
+ * as monominos so the final board exactly matches the original contribution mask (no trimming).
  */
 export interface PlannedReplay {
   script: ReplayScript;
-  /** Board the main phase builds; may be a trimmed subset of the raw contribution mask. */
+  /** Board the main phase builds; equals the original contribution mask (no trimming). */
   grassTarget: Board;
 }
 
@@ -25,13 +26,7 @@ export function planDeterministicReplay(target: Board): PlannedReplay {
   const pad = planDiversityPadAfterIntro();
   assertDiversityPadValid(pad);
 
-  const { steps: mainSteps, trimmedBoard, trimmedCells } = tileTargetWithTrimming(target, 0);
-
-  if (trimmedCells > 0) {
-    console.warn(
-      `Contribution mask trimmed ${trimmedCells} cell(s) (top-first) so tetromino tiling is possible.`,
-    );
-  }
+  const { steps: mainSteps, trimmedBoard } = tileTargetWithTrimming(target, 0);
 
   const all = [...intro, ...pad, ...mainSteps];
   if (countDistinctTypes(all) < 4) {

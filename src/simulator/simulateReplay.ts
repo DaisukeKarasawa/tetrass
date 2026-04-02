@@ -1,4 +1,4 @@
-import { applyPlacement, cloneBoard, createEmptyBoard, isValidLock } from "../domain/board.js";
+import { applyPlacement, applyPlacementNoClear, cloneBoard, createEmptyBoard, isValidLock } from "../domain/board.js";
 import { getCells } from "../domain/tetromino.js";
 import {
   BOARD_HEIGHT,
@@ -116,8 +116,13 @@ export function simulateReplayForFrames(script: ReplayScript): SimulationResult 
 
     appendPreLockDropFrames(frames, board, lock);
 
-    const { linesCleared } = applyPlacement(board, lock);
-    totalLineClears += linesCleared;
+    let linesCleared = 0;
+    if (step.noLineClear) {
+      applyPlacementNoClear(board, lock);
+    } else {
+      linesCleared = applyPlacement(board, lock).linesCleared;
+      totalLineClears += linesCleared;
+    }
 
     frames.push({
       board: cloneBoard(board),
@@ -139,7 +144,11 @@ export function simulateReplayFast(script: ReplayScript): SimulationResult {
     if (!isValidLock(board, step.placement)) {
       throw new Error(`Invalid lock placement: ${JSON.stringify(step.placement)}`);
     }
-    totalLineClears += applyPlacement(board, step.placement).linesCleared;
+    if (step.noLineClear) {
+      applyPlacementNoClear(board, step.placement);
+    } else {
+      totalLineClears += applyPlacement(board, step.placement).linesCleared;
+    }
   }
   return { frames: [], finalBoard: board, totalLineClears, usedTypes };
 }

@@ -78,10 +78,15 @@ function pieceCanMoveDownOnBoard(board: Board, p: PiecePlacement): boolean {
   return true;
 }
 
-/** Valid lock: in bounds, no overlap with stack, cannot move down (standard Tetris lock rule). */
+/**
+ * Valid lock: in bounds, no overlap with stack, cannot move down (standard Tetris lock rule).
+ * Monominos ("M") use a relaxed rule: in bounds + no overlap only (no gravity check),
+ * because single cells may need to be placed at positions unreachable via straight drop.
+ */
 export function isValidLock(board: Board, p: PiecePlacement): boolean {
   const cells = getCells(p.type, p.rotation, p.x, p.y);
   if (!lockCellsOverlapStack(board, cells).ok) return false;
+  if (p.type === "M") return true;
   return !pieceCanMoveDownOnBoard(board, p);
 }
 
@@ -94,4 +99,15 @@ export function applyPlacement(board: Board, p: PiecePlacement): { linesCleared:
     board[cy][cx] = 1;
   }
   return { linesCleared: clearFullRows(board) };
+}
+
+/** Place piece cells without clearing full rows (used during graph-building phase). */
+export function applyPlacementNoClear(board: Board, p: PiecePlacement): void {
+  const cells = getCells(p.type, p.rotation, p.x, p.y);
+  for (const [cx, cy] of cells) {
+    if (cx < 0 || cx >= BOARD_WIDTH || cy < 0 || cy >= BOARD_HEIGHT) {
+      throw new Error(`Invalid placement out of bounds: (${cx}, ${cy})`);
+    }
+    board[cy][cx] = 1;
+  }
 }

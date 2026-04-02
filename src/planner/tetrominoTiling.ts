@@ -1,5 +1,5 @@
 import {
-  applyPlacement,
+  applyPlacementNoClear,
   boardsEqual,
   cloneBoard,
   createEmptyBoard,
@@ -13,6 +13,7 @@ import {
   type Board,
   type PiecePlacement,
   type ReplayStep,
+  type RotationIndex,
   type TetrominoType,
 } from "../domain/types.js";
 
@@ -52,11 +53,6 @@ export interface TilingResult {
   trimmedBoard: Board;
   trimmedCells: number;
 }
-
-/** Minimum retained fraction of original grass for successful tiling on non-trivial masks. */
-const MIN_TRIMMED_RETAIN_RATIO = 0.6;
-/** Below this original grass count, ratio guard is skipped to avoid rejecting sparse profiles. */
-const MIN_GRASS_FOR_RETAIN_RATIO_GUARD = 20;
 
 function grassCells(board: Board): [number, number][] {
   const out: [number, number][] = [];
@@ -105,6 +101,11 @@ function buildOptionsForTarget(target: Board): Map<string, PiecePlacement[]> {
   return options;
 }
 
+/**
+ * Try to find an exact tetromino cover for the target grass cells.
+ * Uses `applyPlacementNoClear` so full rows in the target do not trigger line clears
+ * during validation; the final board must exactly match the target.
+ */
 function tryTile(target: Board, minDistinctTypes: number): ReplayStep[] | null {
   const grass = grassCells(target);
   if (grass.length === 0) return minDistinctTypes === 0 ? [] : null;
@@ -175,7 +176,7 @@ function tryTile(target: Board, minDistinctTypes: number): ReplayStep[] | null {
   if (!dfs()) return null;
 
   // Exact cover search may produce a non-lockable order. Reorder bottom-up and
-  // verify each lock against evolving board state.
+  // verify each lock against evolving board state (no line clears).
   const ordered = [...usedPlacements].sort((a, b) => {
     if (a.y !== b.y) return b.y - a.y;
     if (a.x !== b.x) return a.x - b.x;
@@ -188,60 +189,135 @@ function tryTile(target: Board, minDistinctTypes: number): ReplayStep[] | null {
   const board = createEmptyBoard();
   for (const p of ordered) {
     if (!isValidLock(board, p)) return null;
-    applyPlacement(board, p);
+    applyPlacementNoClear(board, p);
   }
 
-  // Line clears during replay can remove grass; reject if the realized board ≠ target mask.
   if (!boardsEqual(board, target)) {
     return null;
   }
 
-  return ordered.map((placement) => ({ placement }));
+  return ordered.map((placement) => ({ placement, noLineClear: true }));
 }
 
 /**
- * Exact tetromino tiling of grass cells. If unsolvable, trim grass from top rows (small y first)
- * until solvable or empty.
+ * Build monomino replay steps for the given cell positions.
+ * Each monomino is tagged with `noLineClear: true`.
+ */
+function buildMonominoSteps(positions: [number, number][]): ReplayStep[] {
+  return positions.map(([x, y]) => ({
+    placement: { type: "M" as TetrominoType, rotation: 0 as RotationIndex, x, y },
+    noLineClear: true,
+  }));
+}
+
+/**
+ * Merge tetromino and monomino steps, sort bottom-up, and validate the combined
+ * sequence against an empty board using `applyPlacementNoClear`.
+ * Returns the ordered steps if valid, or null if any lock fails.
+ */
+function mergeAndValidate(
+  target: Board,
+  tetrominoSteps: ReplayStep[],
+  monoSteps: ReplayStep[],
+): ReplayStep[] | null {
+  const allSteps = [...tetrominoSteps, ...monoSteps];
+
+  // Sort by bottom cell of each piece (highest y first = bottom-up placement order).
+  allSteps.sort((a, b) => {
+    const aCells = getCells(a.placement.type, a.placement.rotation, a.placement.x, a.placement.y);
+    const bCells = getCells(b.placement.type, b.placement.rotation, b.placement.x, b.placement.y);
+    const aMaxY = Math.max(...aCells.map(([, cy]) => cy));
+    const bMaxY = Math.max(...bCells.map(([, cy]) => cy));
+    if (aMaxY !== bMaxY) return bMaxY - aMaxY;
+    if (a.placement.x !== b.placement.x) return a.placement.x - b.placement.x;
+    return 0;
+  });
+
+  const board = createEmptyBoard();
+  for (const step of allSteps) {
+    if (!isValidLock(board, step.placement)) return null;
+    applyPlacementNoClear(board, step.placement);
+  }
+
+  if (!boardsEqual(board, target)) return null;
+  return allSteps;
+}
+
+/**
+ * Tile the target grass cells using tetrominoes and monominos.
+ *
+ * Strategy:
+ * 1. If grass count is divisible by 4, try pure tetromino tiling.
+ * 2. Otherwise, iteratively extract cells (top-first) as monominos until the
+ *    remaining cells are tileable by tetrominoes.
+ * 3. Combine tetromino and monomino steps, validate the merged sequence.
+ * 4. If DFS-based tiling fails entirely, fall back to all-monomino placement.
+ *
+ * No trimming: the returned `trimmedBoard` always equals the original target,
+ * ensuring the final animation matches the user's actual contribution history.
  */
 export function tileTargetWithTrimming(
   target: Board,
   minDistinctTypes: number,
 ): TilingResult {
-  let trimmed = cloneBoard(target);
-  let trimmedCells = 0;
-  const maxGrass = BOARD_WIDTH * BOARD_HEIGHT;
-  const initialGrassCells = grassCells(target).length;
-
-  for (let attempt = 0; attempt <= maxGrass; attempt++) {
-    const steps = tryTile(trimmed, minDistinctTypes);
-    if (steps) {
-      const remainingGrass = grassCells(trimmed).length;
-      if (initialGrassCells > 0 && remainingGrass === 0) {
-        throw new Error(
-          "Cannot tile the contribution mask without discarding all grass cells. The playfield may be too dense or irregular to pack with tetrominoes; try a sparser contribution grid.",
-        );
-      }
-      if (initialGrassCells >= MIN_GRASS_FOR_RETAIN_RATIO_GUARD) {
-        const retainRatio = remainingGrass / initialGrassCells;
-        if (retainRatio < MIN_TRIMMED_RETAIN_RATIO) {
-          const retainPct = (retainRatio * 100).toFixed(1);
-          const minPct = (MIN_TRIMMED_RETAIN_RATIO * 100).toFixed(1);
-          throw new Error(
-            `Cannot tile contribution mask with acceptable retention: kept ${remainingGrass}/${initialGrassCells} cells (${retainPct}%), below required ${minPct}%.`,
-          );
-        }
-      }
-      return { steps, trimmedBoard: trimmed, trimmedCells };
-    }
-    const cells = grassCells(trimmed);
-    if (cells.length === 0) break;
-    cells.sort((a, b) => (a[1] !== b[1] ? a[1] - b[1] : a[0] - b[0]));
-    const [rx, ry] = cells[0];
-    trimmed[ry][rx] = 0;
-    trimmedCells++;
+  const allGrass = grassCells(target);
+  if (allGrass.length === 0) {
+    return { steps: [], trimmedBoard: cloneBoard(target), trimmedCells: 0 };
   }
 
-  throw new Error(
-    "Could not tile target (even after trimming) with the required tetromino type diversity. Try a sparser contribution grid.",
-  );
+  // --- Fast path: pure tetromino tiling ---
+  if (allGrass.length % 4 === 0) {
+    const steps = tryTile(target, minDistinctTypes);
+    if (steps) {
+      return { steps, trimmedBoard: cloneBoard(target), trimmedCells: 0 };
+    }
+  }
+
+  // --- Mixed path: extract cells as monominos until the rest is tileable ---
+  const reduced = cloneBoard(target);
+  const removedCells: [number, number][] = [];
+
+  for (let i = 0; i < allGrass.length; i++) {
+    const currentGrass = grassCells(reduced);
+    if (currentGrass.length === 0) break;
+
+    // Remove one cell (top-first = smallest y, then smallest x).
+    currentGrass.sort((a, b) => (a[1] !== b[1] ? a[1] - b[1] : a[0] - b[0]));
+    const [rx, ry] = currentGrass[0];
+    reduced[ry][rx] = 0;
+    removedCells.push([rx, ry]);
+
+    // Try tetromino tiling when the remaining count is divisible by 4.
+    const remCount = grassCells(reduced).length;
+    if (remCount % 4 !== 0) continue;
+
+    const tetrominoSteps = tryTile(reduced, 0);
+    if (!tetrominoSteps) continue;
+
+    // Build combined steps and validate.
+    const monoSteps = buildMonominoSteps(removedCells);
+    const merged = mergeAndValidate(target, tetrominoSteps, monoSteps);
+    if (merged) {
+      return { steps: merged, trimmedBoard: cloneBoard(target), trimmedCells: 0 };
+    }
+  }
+
+  // --- Fallback: all cells as monominos ---
+  // Always succeeds because monominos have relaxed lock rules.
+  const allMonoSteps = buildMonominoSteps(allGrass);
+  // Sort bottom-up (highest y first).
+  allMonoSteps.sort((a, b) => {
+    if (a.placement.y !== b.placement.y) return b.placement.y - a.placement.y;
+    return a.placement.x - b.placement.x;
+  });
+
+  const board = createEmptyBoard();
+  for (const step of allMonoSteps) {
+    applyPlacementNoClear(board, step.placement);
+  }
+  if (!boardsEqual(board, target)) {
+    throw new Error("Internal error: all-monomino fallback did not reproduce target.");
+  }
+
+  return { steps: allMonoSteps, trimmedBoard: cloneBoard(target), trimmedCells: 0 };
 }

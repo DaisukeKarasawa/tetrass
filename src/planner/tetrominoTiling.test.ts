@@ -34,30 +34,40 @@ describe("tileTargetWithTrimming", () => {
     expect(replay.finalBoard).toEqual(trimmedBoard);
   });
 
-  it("only accepts tilings whose replay ends on the target grass (line clears included)", () => {
+  it("tiles a full row using noLineClear so the final board matches the target exactly", () => {
     const oneFullRow = createEmptyBoard();
     for (let x = 0; x < BOARD_WIDTH; x++) oneFullRow[BOARD_HEIGHT - 1][x] = 1;
 
     const { steps, trimmedBoard } = tileTargetWithTrimming(oneFullRow, 0);
     const replay = simulateReplayFast({ steps });
+    // With noLineClear, the full row stays intact and trimmedBoard equals the original target.
     expect(replay.finalBoard).toEqual(trimmedBoard);
-    expect(trimmedBoard).not.toEqual(oneFullRow);
+    expect(trimmedBoard).toEqual(oneFullRow);
   });
 
-  it("rejects solutions that discard every grass cell when the input had contributions", () => {
+  it("handles a single isolated cell via monomino (no trimming)", () => {
     const target = boardFromCoords([[0, 0]]);
-    expect(() => tileTargetWithTrimming(target, 0)).toThrow(/discarding all grass cells/i);
+    const { steps, trimmedBoard } = tileTargetWithTrimming(target, 0);
+    expect(steps.length).toBe(1);
+    expect(steps[0].placement.type).toBe("M");
+    const replay = simulateReplayFast({ steps });
+    expect(replay.finalBoard).toEqual(trimmedBoard);
+    expect(trimmedBoard).toEqual(target);
   });
 
-  it("fails when trimming would keep too little of a non-trivial target", () => {
+  it("tiles a fully filled board using monominos without error", () => {
     const full = createEmptyBoard();
     for (let y = 0; y < BOARD_HEIGHT; y++) {
       for (let x = 0; x < BOARD_WIDTH; x++) full[y][x] = 1;
     }
-    expect(() => tileTargetWithTrimming(full, 0)).toThrow(/acceptable retention/i);
+    const { steps, trimmedBoard } = tileTargetWithTrimming(full, 0);
+    expect(steps.length).toBeGreaterThan(0);
+    const replay = simulateReplayFast({ steps });
+    expect(replay.finalBoard).toEqual(trimmedBoard);
+    expect(trimmedBoard).toEqual(full);
   });
 
-  it("does not apply retention guard to very small targets", () => {
+  it("handles small targets with odd cell counts using monominos", () => {
     const target = boardFromCoords([
       [0, 18],
       [1, 18],
@@ -70,6 +80,26 @@ describe("tileTargetWithTrimming", () => {
     for (const row of trimmedBoard) {
       for (const c of row) if (c) grass++;
     }
-    expect(grass).toBeGreaterThan(0);
+    // All 5 cells are preserved (no trimming).
+    expect(grass).toBe(5);
+    expect(trimmedBoard).toEqual(target);
+  });
+
+  it("uses a mix of tetrominoes and monominos for non-divisible-by-4 targets", () => {
+    // 5 cells: should produce 1 tetromino + 1 monomino (or 5 monominos)
+    const target = boardFromCoords([
+      [0, 18],
+      [1, 18],
+      [0, 19],
+      [1, 19],
+      [2, 19],
+    ]);
+    const { steps, trimmedBoard } = tileTargetWithTrimming(target, 0);
+    expect(steps.length).toBeGreaterThan(0);
+    const hasMono = steps.some((s) => s.placement.type === "M");
+    expect(hasMono).toBe(true);
+    const replay = simulateReplayFast({ steps });
+    expect(replay.finalBoard).toEqual(trimmedBoard);
+    expect(trimmedBoard).toEqual(target);
   });
 });

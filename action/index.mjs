@@ -164,6 +164,12 @@ var SHAPES = {
     [[1, 0], [1, 1], [1, 2], [2, 2]],
     [[0, 1], [1, 1], [2, 1], [0, 2]],
     [[0, 0], [1, 0], [1, 1], [1, 2]]
+  ],
+  M: [
+    [[0, 0]],
+    [[0, 0]],
+    [[0, 0]],
+    [[0, 0]]
   ]
 };
 var TYPE_ORDER = ["I", "O", "T", "S", "Z", "J", "L"];
@@ -236,6 +242,7 @@ function pieceCanMoveDownOnBoard(board, p) {
 function isValidLock(board, p) {
   const cells = getCells(p.type, p.rotation, p.x, p.y);
   if (!lockCellsOverlapStack(board, cells).ok) return false;
+  if (p.type === "M") return true;
   return !pieceCanMoveDownOnBoard(board, p);
 }
 function applyPlacement(board, p) {
@@ -247,6 +254,15 @@ function applyPlacement(board, p) {
     board[cy][cx] = 1;
   }
   return { linesCleared: clearFullRows(board) };
+}
+function applyPlacementNoClear(board, p) {
+  const cells = getCells(p.type, p.rotation, p.x, p.y);
+  for (const [cx, cy] of cells) {
+    if (cx < 0 || cx >= BOARD_WIDTH || cy < 0 || cy >= BOARD_HEIGHT) {
+      throw new Error(`Invalid placement out of bounds: (${cx}, ${cy})`);
+    }
+    board[cy][cx] = 1;
+  }
 }
 
 // src/planner/diversityPad.ts
@@ -320,8 +336,6 @@ function normalizedShape(type, rotation) {
     minY
   };
 }
-var MIN_TRIMMED_RETAIN_RATIO = 0.6;
-var MIN_GRASS_FOR_RETAIN_RATIO_GUARD = 20;
 function grassCells(board) {
   const out = [];
   for (let y = 0; y < BOARD_HEIGHT; y++) {
@@ -437,49 +451,81 @@ function tryTile(target, minDistinctTypes) {
   const board = createEmptyBoard();
   for (const p of ordered) {
     if (!isValidLock(board, p)) return null;
-    applyPlacement(board, p);
+    applyPlacementNoClear(board, p);
   }
   if (!boardsEqual(board, target)) {
     return null;
   }
-  return ordered.map((placement) => ({ placement }));
+  return ordered.map((placement) => ({ placement, noLineClear: true }));
+}
+function buildMonominoSteps(positions) {
+  return positions.map(([x, y]) => ({
+    placement: { type: "M", rotation: 0, x, y },
+    noLineClear: true
+  }));
+}
+function mergeAndValidate(target, tetrominoSteps, monoSteps) {
+  const allSteps = [...tetrominoSteps, ...monoSteps];
+  allSteps.sort((a, b) => {
+    const aCells = getCells(a.placement.type, a.placement.rotation, a.placement.x, a.placement.y);
+    const bCells = getCells(b.placement.type, b.placement.rotation, b.placement.x, b.placement.y);
+    const aMaxY = Math.max(...aCells.map(([, cy]) => cy));
+    const bMaxY = Math.max(...bCells.map(([, cy]) => cy));
+    if (aMaxY !== bMaxY) return bMaxY - aMaxY;
+    if (a.placement.x !== b.placement.x) return a.placement.x - b.placement.x;
+    return 0;
+  });
+  const board = createEmptyBoard();
+  for (const step of allSteps) {
+    if (!isValidLock(board, step.placement)) return null;
+    applyPlacementNoClear(board, step.placement);
+  }
+  if (!boardsEqual(board, target)) return null;
+  return allSteps;
 }
 function tileTargetWithTrimming(target, minDistinctTypes) {
-  let trimmed = cloneBoard(target);
-  let trimmedCells = 0;
-  const maxGrass = BOARD_WIDTH * BOARD_HEIGHT;
-  const initialGrassCells = grassCells(target).length;
-  for (let attempt = 0; attempt <= maxGrass; attempt++) {
-    const steps = tryTile(trimmed, minDistinctTypes);
-    if (steps) {
-      const remainingGrass = grassCells(trimmed).length;
-      if (initialGrassCells > 0 && remainingGrass === 0) {
-        throw new Error(
-          "Cannot tile the contribution mask without discarding all grass cells. The playfield may be too dense or irregular to pack with tetrominoes; try a sparser contribution grid."
-        );
-      }
-      if (initialGrassCells >= MIN_GRASS_FOR_RETAIN_RATIO_GUARD) {
-        const retainRatio = remainingGrass / initialGrassCells;
-        if (retainRatio < MIN_TRIMMED_RETAIN_RATIO) {
-          const retainPct = (retainRatio * 100).toFixed(1);
-          const minPct = (MIN_TRIMMED_RETAIN_RATIO * 100).toFixed(1);
-          throw new Error(
-            `Cannot tile contribution mask with acceptable retention: kept ${remainingGrass}/${initialGrassCells} cells (${retainPct}%), below required ${minPct}%.`
-          );
-        }
-      }
-      return { steps, trimmedBoard: trimmed, trimmedCells };
-    }
-    const cells = grassCells(trimmed);
-    if (cells.length === 0) break;
-    cells.sort((a, b) => a[1] !== b[1] ? a[1] - b[1] : a[0] - b[0]);
-    const [rx, ry] = cells[0];
-    trimmed[ry][rx] = 0;
-    trimmedCells++;
+  const allGrass = grassCells(target);
+  if (allGrass.length === 0) {
+    return { steps: [], trimmedBoard: cloneBoard(target), trimmedCells: 0 };
   }
-  throw new Error(
-    "Could not tile target (even after trimming) with the required tetromino type diversity. Try a sparser contribution grid."
-  );
+  if (allGrass.length % 4 === 0) {
+    const steps = tryTile(target, minDistinctTypes);
+    if (steps) {
+      return { steps, trimmedBoard: cloneBoard(target), trimmedCells: 0 };
+    }
+  }
+  const reduced = cloneBoard(target);
+  const removedCells = [];
+  for (let i = 0; i < allGrass.length; i++) {
+    const currentGrass = grassCells(reduced);
+    if (currentGrass.length === 0) break;
+    currentGrass.sort((a, b) => a[1] !== b[1] ? a[1] - b[1] : a[0] - b[0]);
+    const [rx, ry] = currentGrass[0];
+    reduced[ry][rx] = 0;
+    removedCells.push([rx, ry]);
+    const remCount = grassCells(reduced).length;
+    if (remCount % 4 !== 0) continue;
+    const tetrominoSteps = tryTile(reduced, 0);
+    if (!tetrominoSteps) continue;
+    const monoSteps = buildMonominoSteps(removedCells);
+    const merged = mergeAndValidate(target, tetrominoSteps, monoSteps);
+    if (merged) {
+      return { steps: merged, trimmedBoard: cloneBoard(target), trimmedCells: 0 };
+    }
+  }
+  const allMonoSteps = buildMonominoSteps(allGrass);
+  allMonoSteps.sort((a, b) => {
+    if (a.placement.y !== b.placement.y) return b.placement.y - a.placement.y;
+    return a.placement.x - b.placement.x;
+  });
+  const board = createEmptyBoard();
+  for (const step of allMonoSteps) {
+    applyPlacementNoClear(board, step.placement);
+  }
+  if (!boardsEqual(board, target)) {
+    throw new Error("Internal error: all-monomino fallback did not reproduce target.");
+  }
+  return { steps: allMonoSteps, trimmedBoard: cloneBoard(target), trimmedCells: 0 };
 }
 
 // src/planner/deterministicPlanner.ts
@@ -493,12 +539,7 @@ function planDeterministicReplay(target) {
   assertIntroValid(intro);
   const pad = planDiversityPadAfterIntro();
   assertDiversityPadValid(pad);
-  const { steps: mainSteps, trimmedBoard, trimmedCells } = tileTargetWithTrimming(target, 0);
-  if (trimmedCells > 0) {
-    console.warn(
-      `Contribution mask trimmed ${trimmedCells} cell(s) (top-first) so tetromino tiling is possible.`
-    );
-  }
+  const { steps: mainSteps, trimmedBoard } = tileTargetWithTrimming(target, 0);
   const all = [...intro, ...pad, ...mainSteps];
   if (countDistinctTypes(all) < 4) {
     throw new Error(`Shape diversity failed: only ${countDistinctTypes(all)} types in full replay.`);
@@ -738,8 +779,13 @@ function simulateReplayForFrames(script) {
       throw new Error(`Invalid lock placement: ${JSON.stringify(lock)}`);
     }
     appendPreLockDropFrames(frames, board, lock);
-    const { linesCleared } = applyPlacement(board, lock);
-    totalLineClears += linesCleared;
+    let linesCleared = 0;
+    if (step.noLineClear) {
+      applyPlacementNoClear(board, lock);
+    } else {
+      linesCleared = applyPlacement(board, lock).linesCleared;
+      totalLineClears += linesCleared;
+    }
     frames.push({
       board: cloneBoard(board),
       active: null,
@@ -757,7 +803,11 @@ function simulateReplayFast(script) {
     if (!isValidLock(board, step.placement)) {
       throw new Error(`Invalid lock placement: ${JSON.stringify(step.placement)}`);
     }
-    totalLineClears += applyPlacement(board, step.placement).linesCleared;
+    if (step.noLineClear) {
+      applyPlacementNoClear(board, step.placement);
+    } else {
+      totalLineClears += applyPlacement(board, step.placement).linesCleared;
+    }
   }
   return { frames: [], finalBoard: board, totalLineClears, usedTypes };
 }

@@ -1,7 +1,7 @@
 export const BOARD_WIDTH = 10;
 export const BOARD_HEIGHT = 20;
 
-export type TetrominoType = "I" | "O" | "T" | "S" | "Z" | "J" | "L";
+export type TetrominoType = "I" | "O" | "T" | "S" | "Z" | "J" | "L" | "M";
 
 export type Cell = 0 | 1;
 
@@ -20,6 +20,8 @@ export interface PiecePlacement {
 
 export interface ReplayStep {
   placement: PiecePlacement;
+  /** When true, line clears are suppressed for this step (used during graph-building phase). */
+  noLineClear?: boolean;
 }
 
 export interface ReplayScript {
