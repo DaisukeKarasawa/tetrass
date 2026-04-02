@@ -1,5 +1,5 @@
 name: Tetrass
-description: Generate deterministic Tetris-style GitHub contribution SVGs (README-friendly, snk-style outputs).
+description: Generate deterministic animated GitHub contribution graph SVGs (53×7 heatmap, nine-band drop, snk-style outputs).
 branding:
   icon: grid
   color: green
