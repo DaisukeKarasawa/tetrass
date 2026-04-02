@@ -115,13 +115,16 @@ function buildSampleContributionDays() {
   const days = [];
   const start = /* @__PURE__ */ new Date("2024-01-01T00:00:00Z");
   const sampleWeeks = Math.ceil(SAMPLE_CONTRIBUTION_DAY_COUNT / GITHUB_WEEKDAYS);
-  const sampleGrassCell = (week, weekday) => week >= 6 && week <= sampleWeeks - 4 && weekday >= 1 && weekday <= 5;
+  const sampleGrassCell = (week, weekday) => {
+    const last16Start = Math.max(0, sampleWeeks - 16);
+    return week >= last16Start && weekday >= 1 && weekday <= 5;
+  };
   for (let i = 0; i < SAMPLE_CONTRIBUTION_DAY_COUNT; i++) {
     const d = new Date(start);
     d.setUTCDate(start.getUTCDate() + i);
     const date = d.toISOString().slice(0, 10);
     const week = Math.floor(i / GITHUB_WEEKDAYS);
-    const weekday = i % GITHUB_WEEKDAYS;
+    const weekday = d.getUTCDay();
     const contributionCount = sampleGrassCell(week, weekday) ? 1 : 0;
     days.push({ date, weekday, contributionCount });
   }
@@ -541,7 +544,8 @@ function tileTargetWithTrimming(target, minDistinctTypes) {
   }
   const width = target[0]?.length ?? 0;
   const height = target.length;
-  const mayUseExactCover = width >= 8 && height >= 8 && allGrass.length <= TILING_EXACT_COVER_MAX_GRASS_CELLS;
+  const boardCanUseExactCover = width >= 8 || height >= 8;
+  const mayUseExactCover = boardCanUseExactCover && allGrass.length <= TILING_EXACT_COVER_MAX_GRASS_CELLS;
   if (mayUseExactCover && allGrass.length % 4 === 0) {
     const steps = tryTile(target, minDistinctTypes);
     if (steps) {
@@ -560,7 +564,7 @@ function tileTargetWithTrimming(target, minDistinctTypes) {
     const remCount = grassCells(reduced).length;
     if (remCount === 0) break;
     if (remCount % 4 !== 0) continue;
-    if (!mayUseExactCover || remCount > TILING_EXACT_COVER_MAX_GRASS_CELLS) continue;
+    if (!boardCanUseExactCover || remCount > TILING_EXACT_COVER_MAX_GRASS_CELLS) continue;
     const tetrominoSteps = tryTile(reduced, 0);
     if (!tetrominoSteps || tetrominoSteps.length === 0) continue;
     const monoSteps = buildMonominoSteps(removedCells);
