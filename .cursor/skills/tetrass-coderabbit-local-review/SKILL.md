@@ -9,7 +9,7 @@ description: >-
 ## Goal
 Use `coderabbit --prompt-only` as a second-opinion reviewer for local diffs, then apply only high-signal fixes:
 - Action contract integrity (`action/action.yml` ↔ parser ↔ workflow ↔ README)
-- Deterministic invariants (final-match, line-clear >= 1, piece-diversity >= 4)
+- Deterministic invariants (53×7 `contributionLevel` mapping, nine-band drop order, SVG matches grass cell count)
 - Path safety and token hygiene
 
 ## When to use

@@ -3,8 +3,9 @@
 ## Goal
 
 Keep Codex review high-signal for this repository by prioritizing regressions that break:
-1) replay correctness,
-2) determinism,
+
+1) contribution grid / level mapping correctness,
+2) nine-band drop behavior and determinism,
 3) action and CI reliability.
 
 This document complements `AGENTS.md` and defines repo-specific review behavior.
@@ -20,43 +21,50 @@ Do not report cosmetic or style-only findings unless they directly cause functio
 
 ## Repo-specific critical boundaries
 
-### A) Planner and simulator boundary (highest priority)
+### A) Contribution ingest and 53×7 mapping (highest priority)
 
 Files:
-- `src/planner/tetrominoTiling.ts`
-- `src/planner/deterministicPlanner.ts`
-- `src/simulator/simulateReplay.ts`
+
+- `src/io/contributions.ts`
+- `src/domain/grass.ts`
 
 Review for:
-- exact-cover vs legal-lock mismatch,
-- placement order validity under gravity (`isValidLock` semantics),
-- coordinate normalization/origin drift between candidate generation and replay.
+
+- GraphQL field coverage (`contributionLevel`, `weekday`, `date`) and safe error handling,
+- correct GitHub week grid semantics (x = week index, y = weekday),
+- right-aligned 53-week viewport behavior.
 
 Raise P0/P1 when:
-- generated replay can fail lock validation,
-- replay semantics can diverge from target coverage.
 
-### B) Acceptance invariants and determinism
+- levels or dates land in wrong cells,
+- empty vs non-empty classification diverges from GitHub for the same API payload.
+
+### B) Nine-band split, schedule, and SVG output
 
 Files:
-- `src/generateRunner.ts`
-- `src/verify/finalBoardMatcher.ts`
-- `src/io/contributions.ts`
+
+- `src/grass/groupDropPlanner.ts`
 - `src/renderer/svgRenderer.ts`
+- `src/generateRunner.ts`
 
 Review for:
-- `finalBoard` equality to target (trimmed target where applicable),
-- deterministic behavior given same inputs,
-- silent contract changes in fallback/sample logic.
+
+- column bands `6+6+6+6+6+6+6+6+5` covering `0..52` exactly once,
+- sequential left-to-right drop timing,
+- final visible grass cells match the level board (no duplicates / drops),
+- deterministic SVG for identical inputs,
+- safe embedding of palette colors (no attribute injection).
 
 ### C) Action interface and output safety
 
 Files:
+
 - `action/action.yml`
 - `src/action-entry.ts`
 - `src/generateRunner.ts`
 
 Review for:
+
 - input/env mapping consistency,
 - output path handling (workspace escape risk),
 - palette/output parsing regressions.
@@ -64,10 +72,12 @@ Review for:
 ### D) CI and release reliability
 
 Files:
+
 - `.github/workflows/*.yml`
 - `package.json`
 
 Review for:
+
 - PR-time build/test coverage,
 - bundle freshness checks for `action/index.mjs`,
 - workflow permissions scope and write behavior.
@@ -82,8 +92,8 @@ Review for:
 
 ### Strongly catch
 
-- Replay that cannot be legally locked in simulator order.
-- Coordinate mapping mistakes that invalidate tiling correctness.
+- Wrong `contributionLevel` mapping or broken 53×7 placement.
+- Nine-band boundaries or drop ordering regressions.
 - Action contract breaks (`inputs` and `outputs` behavior mismatch).
 - CI gaps that allow stale bundle or untested merges.
 - Path handling that can write outside intended workspace.
@@ -116,4 +126,3 @@ Use this structure for each finding:
 ## Assumptions and TBD
 
 - Assumption: project history is currently limited (PR #1 is the only observed PR), so trend-based calibration is provisional.
-- TBD: acceptable trimming tolerance (e.g. max cells or ratio before hard-fail generation).
