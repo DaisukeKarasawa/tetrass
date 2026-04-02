@@ -204,12 +204,8 @@ export function assertSvgFinalBoardMatchesTarget(svg: string, target: Board): vo
   const summary = summarizeSvgReplay(svg);
   if (boardsEqual(summary.finalBoard, target)) return;
 
-  // Delta renderer may skip explicit per-cell values if a cell never changes after its first visible state.
-  // Fall back to strict grass-count parity to keep artifact checks robust while still catching empty/broken outputs.
-  // This is a deliberate quality-gate relaxation for delta-rendered artifacts where unchanged cells might be omitted.
-  if (boardGrassCount(summary.finalBoard) === boardGrassCount(target)) {
-    return;
-  }
+  // Strict artifact check: final frame must match the target board cell-for-cell.
+  // Do not allow grass-count parity as a fallback; this ensures coordinate-level correctness.
   throw new Error("Rendered SVG final frame does not match target board.");
 }
 
