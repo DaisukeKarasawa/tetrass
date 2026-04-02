@@ -336,6 +336,11 @@ function normalizedShape(type, rotation) {
     minY
   };
 }
+function countDistinctTypes(steps) {
+  const used = /* @__PURE__ */ new Set();
+  for (const st of steps) used.add(st.placement.type);
+  return used.size;
+}
 function grassCells(board) {
   const out = [];
   for (let y = 0; y < BOARD_HEIGHT; y++) {
@@ -504,12 +509,14 @@ function tileTargetWithTrimming(target, minDistinctTypes) {
     reduced[ry][rx] = 0;
     removedCells.push([rx, ry]);
     const remCount = grassCells(reduced).length;
+    if (remCount === 0) break;
     if (remCount % 4 !== 0) continue;
     const tetrominoSteps = tryTile(reduced, 0);
-    if (!tetrominoSteps) continue;
+    if (!tetrominoSteps || tetrominoSteps.length === 0) continue;
     const monoSteps = buildMonominoSteps(removedCells);
     const merged = mergeAndValidate(target, tetrominoSteps, monoSteps);
     if (merged) {
+      if (countDistinctTypes(merged) < minDistinctTypes) continue;
       return { steps: merged, trimmedBoard: cloneBoard(target), trimmedCells: 0 };
     }
   }
@@ -518,6 +525,12 @@ function tileTargetWithTrimming(target, minDistinctTypes) {
     if (a.placement.y !== b.placement.y) return b.placement.y - a.placement.y;
     return a.placement.x - b.placement.x;
   });
+  const monoTypeCount = countDistinctTypes(allMonoSteps);
+  if (monoTypeCount < minDistinctTypes) {
+    throw new Error(
+      `Could not tile target with required piece diversity: need >=${minDistinctTypes} types, got ${monoTypeCount}.`
+    );
+  }
   const board = createEmptyBoard();
   for (const step of allMonoSteps) {
     if (!isValidLock(board, step.placement)) {
@@ -532,7 +545,7 @@ function tileTargetWithTrimming(target, minDistinctTypes) {
 }
 
 // src/planner/deterministicPlanner.ts
-function countDistinctTypes(steps) {
+function countDistinctTypes2(steps) {
   const s = /* @__PURE__ */ new Set();
   for (const st of steps) s.add(st.placement.type);
   return s.size;
@@ -544,8 +557,8 @@ function planDeterministicReplay(target) {
   assertDiversityPadValid(pad);
   const { steps: mainSteps, trimmedBoard } = tileTargetWithTrimming(target, 0);
   const all = [...intro, ...pad, ...mainSteps];
-  if (countDistinctTypes(all) < 4) {
-    throw new Error(`Shape diversity failed: only ${countDistinctTypes(all)} types in full replay.`);
+  if (countDistinctTypes2(all) < 4) {
+    throw new Error(`Shape diversity failed: only ${countDistinctTypes2(all)} types in full replay.`);
   }
   return { script: { steps: all }, grassTarget: trimmedBoard };
 }

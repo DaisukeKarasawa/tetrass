@@ -54,6 +54,12 @@ export interface TilingResult {
   trimmedCells: number;
 }
 
+function countDistinctTypes(steps: ReplayStep[]): number {
+  const used = new Set<TetrominoType>();
+  for (const st of steps) used.add(st.placement.type);
+  return used.size;
+}
+
 function grassCells(board: Board): [number, number][] {
   const out: [number, number][] = [];
   for (let y = 0; y < BOARD_HEIGHT; y++) {
@@ -289,15 +295,17 @@ export function tileTargetWithTrimming(
 
     // Try tetromino tiling when the remaining count is divisible by 4.
     const remCount = grassCells(reduced).length;
+    if (remCount === 0) break;
     if (remCount % 4 !== 0) continue;
 
     const tetrominoSteps = tryTile(reduced, 0);
-    if (!tetrominoSteps) continue;
+    if (!tetrominoSteps || tetrominoSteps.length === 0) continue;
 
     // Build combined steps and validate.
     const monoSteps = buildMonominoSteps(removedCells);
     const merged = mergeAndValidate(target, tetrominoSteps, monoSteps);
     if (merged) {
+      if (countDistinctTypes(merged) < minDistinctTypes) continue;
       return { steps: merged, trimmedBoard: cloneBoard(target), trimmedCells: 0 };
     }
   }
@@ -310,6 +318,12 @@ export function tileTargetWithTrimming(
     if (a.placement.y !== b.placement.y) return b.placement.y - a.placement.y;
     return a.placement.x - b.placement.x;
   });
+  const monoTypeCount = countDistinctTypes(allMonoSteps);
+  if (monoTypeCount < minDistinctTypes) {
+    throw new Error(
+      `Could not tile target with required piece diversity: need >=${minDistinctTypes} types, got ${monoTypeCount}.`,
+    );
+  }
 
   const board = createEmptyBoard();
   for (const step of allMonoSteps) {

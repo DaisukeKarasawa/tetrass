@@ -104,6 +104,22 @@ describe("tileTargetWithTrimming", () => {
     expect(trimmedBoard).toEqual(target);
   });
 
+  it("does not let mixed path collapse to implicit all-monomino when reduced board becomes empty", () => {
+    // Single cell forces remCount -> 0 after one removal in mixed path.
+    // Must go through explicit fallback, not merge([], mono).
+    const target = boardFromCoords([[4, 10]]);
+    const { steps } = tileTargetWithTrimming(target, 0);
+    expect(steps).toHaveLength(1);
+    expect(steps[0].placement.type).toBe("M");
+  });
+
+  it("rejects mixed and fallback outputs that cannot satisfy minDistinctTypes", () => {
+    // One-cell target can only be solved by monomino fallback => distinct types = 1.
+    // With minDistinctTypes=2, it must throw instead of silently accepting.
+    const target = boardFromCoords([[0, 0]]);
+    expect(() => tileTargetWithTrimming(target, 2)).toThrow(/diversity|minDistinctTypes/i);
+  });
+
   it("full deterministic replay has line clears >= 1, piece types >= 4, and final board == target", () => {
     // Use a target that is tileable by tetrominoes (8 cells = 2 O-pieces).
     const target = boardFromCoords([
