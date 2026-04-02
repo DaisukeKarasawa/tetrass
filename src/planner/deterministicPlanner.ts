@@ -29,7 +29,9 @@ export function planDeterministicReplay(target: Board): PlannedReplay {
   const pad = planDiversityPadAfterIntro(width, height);
   assertDiversityPadValid(pad, width, height);
 
-  const minDistinctTypes = width >= 10 && height >= 20 ? 4 : 2;
+  // Enforce a floor of 4 distinct piece types across the full replay,
+  // regardless of board dimensions (including 53x7 GitHub grid).
+  const minDistinctTypes = 4;
   const minDistinctTypesFromMain = Math.max(0, minDistinctTypes - introTypeCount);
   const { steps: mainSteps, trimmedBoard } = tileTargetWithTrimming(target, minDistinctTypesFromMain);
 
