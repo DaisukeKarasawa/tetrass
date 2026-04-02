@@ -279,7 +279,7 @@ export function tileTargetWithTrimming(
   const width = target[0]?.length ?? 0;
   const height = target.length;
   const mayUseExactCover =
-    width >= 8 && height >= 8 && allGrass.length <= TILING_EXACT_COVER_MAX_GRASS_CELLS;
+    (width >= 8 || height >= 8) && allGrass.length <= TILING_EXACT_COVER_MAX_GRASS_CELLS;
 
   // --- Fast path: pure tetromino tiling ---
   if (mayUseExactCover && allGrass.length % 4 === 0) {
