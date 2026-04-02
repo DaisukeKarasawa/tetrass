@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { createEmptyLevelBoard, GRID_VISIBLE_WEEKS, groupColumnRanges } from "../domain/grass.js";
-import { buildDropSchedule, DROP_DURATION_MS, splitBoardIntoColumnGroups } from "./groupDropPlanner.js";
+import {
+  buildDropSchedule,
+  DROP_DURATION_MS,
+  HOLD_AFTER_LAST_MS,
+  splitBoardIntoColumnGroups,
+  totalCycleMs,
+} from "./groupDropPlanner.js";
 import { contributionDaysToLevelBoard, type ContributionDay } from "../io/contributions.js";
 
 describe("groupColumnRanges", () => {
@@ -67,5 +73,18 @@ describe("buildDropSchedule", () => {
     for (let i = 0; i < segs.length; i++) {
       expect(segs[i]!.startMs).toBe(i * DROP_DURATION_MS);
     }
+  });
+});
+
+describe("totalCycleMs", () => {
+  it("returns hold-only duration when there are no segments", () => {
+    expect(totalCycleMs([])).toBe(HOLD_AFTER_LAST_MS);
+  });
+
+  it("extends through the last drop plus hold", () => {
+    const { board, meta } = contributionDaysToLevelBoard([]);
+    const segs = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const last = segs[segs.length - 1]!;
+    expect(totalCycleMs(segs)).toBe(last.startMs + last.dropDurationMs + HOLD_AFTER_LAST_MS);
   });
 });

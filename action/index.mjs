@@ -95,12 +95,12 @@ async function fetchContributionCalendar(login, token) {
     clearTimeout(timeoutId);
   }
 }
-function flattenContributionDays(cal) {
-  const days = [];
-  for (const w of cal.weeks) {
-    for (const d of w.contributionDays) days.push(d);
+function chunkDaysIntoWeeks(days) {
+  const weeks = [];
+  for (let i = 0; i < days.length; i += GRID_WEEKDAYS) {
+    weeks.push({ contributionDays: days.slice(i, i + GRID_WEEKDAYS) });
   }
-  return days;
+  return { weeks };
 }
 var SAMPLE_CONTRIBUTION_DAY_COUNT = 400;
 function inferredWeekdayAt(day) {
@@ -125,9 +125,9 @@ function contributionLevelToGrassLevel(level) {
     }
   }
 }
-function contributionDaysToLevelBoard(days) {
+function contributionCalendarToLevelBoard(cal) {
   const emptyMeta = (date) => ({ date, contributionCount: 0 });
-  if (days.length === 0) {
+  if (cal.weeks.length === 0) {
     const board2 = createEmptyLevelBoard();
     const meta2 = Array.from(
       { length: GRID_WEEKDAYS },
@@ -135,26 +135,49 @@ function contributionDaysToLevelBoard(days) {
     );
     return { board: board2, meta: meta2 };
   }
-  const totalWeeks = Math.ceil(days.length / GRID_WEEKDAYS);
+  const totalWeeks = cal.weeks.length;
   const visibleWeeks = Math.min(GRID_VISIBLE_WEEKS, totalWeeks);
-  const startDayIdx = Math.max(0, (totalWeeks - visibleWeeks) * GRID_WEEKDAYS);
-  const visibleDays = days.slice(startDayIdx);
+  const startWeekIdx = Math.max(0, totalWeeks - visibleWeeks);
   const xOffset = GRID_VISIBLE_WEEKS - visibleWeeks;
   const board = createEmptyLevelBoard();
   const meta = Array.from(
     { length: GRID_WEEKDAYS },
     (_, y) => Array.from({ length: GRID_VISIBLE_WEEKS }, (_2, x) => emptyMeta(`pad-${y}-${x}`))
   );
-  for (let i = 0; i < visibleDays.length; i++) {
-    const day = visibleDays[i];
-    const x = xOffset + Math.floor(i / GRID_WEEKDAYS);
-    const y = inferredWeekdayAt(day);
-    if (x >= 0 && x < GRID_VISIBLE_WEEKS && y >= 0 && y < GRID_WEEKDAYS) {
-      board[y][x] = contributionLevelToGrassLevel(day.contributionLevel);
-      meta[y][x] = { date: day.date, contributionCount: day.contributionCount };
+  for (let wi = startWeekIdx; wi < totalWeeks; wi++) {
+    const x = xOffset + (wi - startWeekIdx);
+    for (const day of cal.weeks[wi].contributionDays) {
+      const y = inferredWeekdayAt(day);
+      if (x >= 0 && x < GRID_VISIBLE_WEEKS && y >= 0 && y < GRID_WEEKDAYS) {
+        board[y][x] = contributionLevelToGrassLevel(day.contributionLevel);
+        meta[y][x] = { date: day.date, contributionCount: day.contributionCount };
+      }
     }
   }
   return { board, meta };
+}
+async function fetchOrBuildContributionCalendar(opts) {
+  const { login, token, useSample, allowUnauthenticatedFallback = false } = opts;
+  if (useSample) {
+    console.warn("Using deterministic sample contributions (offline/sample mode).");
+    return chunkDaysIntoWeeks(buildSampleContributionDays());
+  }
+  try {
+    return await fetchContributionCalendar(login, token);
+  } catch (e) {
+    if (!token) {
+      if (allowUnauthenticatedFallback) {
+        console.warn(
+          "GitHub fetch failed without token; falling back to sample contributions (TETRASS_ALLOW_UNAUTH_FALLBACK=1)."
+        );
+        return chunkDaysIntoWeeks(buildSampleContributionDays());
+      }
+      throw new Error(
+        "GitHub fetch failed with no GITHUB_TOKEN. Set GITHUB_TOKEN for real contribution data, use TETRASS_USE_SAMPLE=1 (or TETRASS_OFFLINE=1) for offline sample mode, or set TETRASS_ALLOW_UNAUTH_FALLBACK=1 for CLI-only opt-in when an unauthenticated fetch fails."
+      );
+    }
+    throw new Error(`GitHub API request failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 function buildSampleContributionDays() {
   const days = [];
@@ -202,7 +225,7 @@ function splitBoardIntoColumnGroups(board, meta) {
     for (let y = 0; y < GRID_WEEKDAYS; y++) {
       for (let x = xStart; x <= xEndInclusive; x++) {
         const level = board[y][x];
-        if (level <= 0) continue;
+        if (level === 0) continue;
         const m = meta[y]?.[x];
         if (!m) {
           throw new Error(`Missing meta for grass cell at (${x},${y})`);
@@ -369,6 +392,24 @@ ${sym("cG4", l4)}
 function levelHref(level) {
   return `cG${level}`;
 }
+function smilDropTimeline(startMs, dropDurationMs, cycleMs, fallPx) {
+  const a = startMs / cycleMs;
+  const b = (startMs + dropDurationMs) / cycleMs;
+  const r = Math.max(0, 1 - CYCLE_TAIL_RESET);
+  const fmt = (t) => t.toFixed(6);
+  if (a <= Number.EPSILON) {
+    return {
+      keyTimes: `0;${fmt(b)};${fmt(r)};1`,
+      translateValues: `0,-${fallPx};0,0;0,0;0,-${fallPx}`,
+      opValues: `1;1;0;0`
+    };
+  }
+  return {
+    keyTimes: `0;${fmt(a)};${fmt(b)};${fmt(r)};1`,
+    translateValues: `0,-${fallPx};0,-${fallPx};0,0;0,0;0,-${fallPx}`,
+    opValues: `0;1;1;0;0`
+  };
+}
 function renderEmptyGrid() {
   let s = "";
   for (let y = 0; y < GRID_WEEKDAYS; y++) {
@@ -381,12 +422,7 @@ function renderEmptyGrid() {
 function renderGroupDrop(seg, cycleMs) {
   const fallPx = seg.fallOffsetCells * step;
   const { startMs, dropDurationMs } = seg;
-  const a = startMs / cycleMs;
-  const b = (startMs + dropDurationMs) / cycleMs;
-  const r = Math.max(0, 1 - CYCLE_TAIL_RESET);
-  const keyTimes = `0;${a.toFixed(6)};${b.toFixed(6)};${r.toFixed(6)};1`;
-  const translateValues = `0,-${fallPx};0,-${fallPx};0,0;0,0;0,-${fallPx}`;
-  const opValues = `0;1;1;0;0`;
+  const { keyTimes, translateValues, opValues } = smilDropTimeline(startMs, dropDurationMs, cycleMs, fallPx);
   const inner = seg.cells.map((c) => {
     const href = levelHref(c.level);
     return cellUse(c.x, c.y, href);
@@ -417,6 +453,7 @@ ${buildSymbols(safe)}
 <g id="emptyCells">
 ${renderEmptyGrid()}
 </g>
+<!-- grassDrops: animated non-zero cells only. All-zero boards keep this group empty (stable id for DOM/tests). -->
 <g id="grassDrops">
 ${drops}
 </g>
@@ -426,30 +463,6 @@ ${drops}
 // src/generateRunner.ts
 function paletteFor(kind) {
   return kind === "dark" ? PALETTE_DARK : PALETTE_LIGHT;
-}
-async function fetchOrBuildContributionDays(opts) {
-  const { login, token, useSample, allowUnauthenticatedFallback = false } = opts;
-  if (useSample) {
-    console.warn("Using deterministic sample contributions (offline/sample mode).");
-    return buildSampleContributionDays();
-  }
-  try {
-    const cal = await fetchContributionCalendar(login, token);
-    return flattenContributionDays(cal);
-  } catch (e) {
-    if (!token) {
-      if (allowUnauthenticatedFallback) {
-        console.warn(
-          "GitHub fetch failed without token; falling back to sample contributions (TETRASS_ALLOW_UNAUTH_FALLBACK=1)."
-        );
-        return buildSampleContributionDays();
-      }
-      throw new Error(
-        "GitHub fetch failed with no GITHUB_TOKEN. Set GITHUB_TOKEN for real contribution data, use TETRASS_USE_SAMPLE=1 (or TETRASS_OFFLINE=1) for offline sample mode, or set TETRASS_ALLOW_UNAUTH_FALLBACK=1 for CLI-only opt-in when an unauthenticated fetch fails."
-      );
-    }
-    throw new Error(`GitHub API request failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
 }
 function resolveWorkspaceRoots(workspaceRoot) {
   const workspaceRootResolved = workspaceRoot ? resolve(workspaceRoot) : null;
@@ -503,13 +516,13 @@ async function renderAndWriteGrassOutputs(opts) {
 async function runTetrassGenerate(opts) {
   const { login, token, outputs, useSample, workspaceRoot, allowUnauthenticatedFallback } = opts;
   if (outputs.length === 0) throw new Error("At least one output path is required.");
-  const days = await fetchOrBuildContributionDays({
+  const cal = await fetchOrBuildContributionCalendar({
     login,
     token,
     useSample,
     allowUnauthenticatedFallback
   });
-  const { board, meta } = contributionDaysToLevelBoard(days);
+  const { board, meta } = contributionCalendarToLevelBoard(cal);
   const groups = splitBoardIntoColumnGroups(board, meta);
   const segments = buildDropSchedule(groups);
   const { workspaceRootResolved, workspaceRootCanonical } = resolveWorkspaceRoots(workspaceRoot);

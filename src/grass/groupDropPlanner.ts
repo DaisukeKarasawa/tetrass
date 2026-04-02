@@ -33,7 +33,7 @@ export function splitBoardIntoColumnGroups(board: LevelBoard, meta: GrassCellMet
     for (let y = 0; y < GRID_WEEKDAYS; y++) {
       for (let x = xStart; x <= xEndInclusive; x++) {
         const level = board[y]![x]!;
-        if (level <= 0) continue;
+        if (level === 0) continue;
         const m = meta[y]?.[x];
         if (!m) {
           throw new Error(`Missing meta for grass cell at (${x},${y})`);

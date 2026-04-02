@@ -4,6 +4,7 @@ import {
   type ContributionCalendar,
   type ContributionDay,
   buildSampleContributionDays,
+  contributionCalendarToLevelBoard,
   contributionDaysToLevelBoard,
   contributionLevelToGrassLevel,
   fetchContributionCalendar,
@@ -40,6 +41,40 @@ describe("contributionLevelToGrassLevel", () => {
     expect(contributionLevelToGrassLevel("SECOND_QUARTILE")).toBe(2);
     expect(contributionLevelToGrassLevel("THIRD_QUARTILE")).toBe(3);
     expect(contributionLevelToGrassLevel("FOURTH_QUARTILE")).toBe(4);
+  });
+});
+
+describe("contributionCalendarToLevelBoard", () => {
+  it("maps API week index to x (partial first/last weeks do not shift columns)", () => {
+    const cal: ContributionCalendar = {
+      weeks: [
+        {
+          contributionDays: [
+            { date: "2024-01-03", weekday: 2, contributionCount: 1, contributionLevel: "THIRD_QUARTILE" },
+          ],
+        },
+        { contributionDays: [] },
+      ],
+    };
+    const { board, meta } = contributionCalendarToLevelBoard(cal);
+    expect(board[2]![51]).toBe(3);
+    expect(meta[2]![51]!.date).toBe("2024-01-03");
+  });
+
+  it("right-aligns to the last 53 weeks when the API returns more than 53", () => {
+    const weeks: ContributionCalendar["weeks"] = Array.from({ length: 54 }, (_, wi) => ({
+      contributionDays:
+        wi === 0
+          ? [{ date: "trimmed-only", weekday: 3, contributionCount: 9, contributionLevel: "FOURTH_QUARTILE" as const }]
+          : wi === 53
+            ? [{ date: "visible-last", weekday: 3, contributionCount: 2, contributionLevel: "FIRST_QUARTILE" as const }]
+            : [],
+    }));
+    const { board, meta } = contributionCalendarToLevelBoard({ weeks });
+    expect(board[3]![0]).toBe(0);
+    expect(meta[3]![0]!.date.startsWith("pad-")).toBe(true);
+    expect(board[3]![52]).toBe(1);
+    expect(meta[3]![52]!.date).toBe("visible-last");
   });
 });
 

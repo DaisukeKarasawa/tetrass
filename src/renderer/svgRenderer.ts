@@ -1,4 +1,4 @@
-import type { GroupDropSegment } from "../domain/grass.js";
+import type { GrassDropLevel, GroupDropSegment } from "../domain/grass.js";
 import { GRID_VISIBLE_WEEKS, GRID_WEEKDAYS } from "../domain/grass.js";
 import { totalCycleMs } from "../grass/groupDropPlanner.js";
 
@@ -160,8 +160,33 @@ ${sym("cG4", l4)}
 </defs>`;
 }
 
-function levelHref(level: 1 | 2 | 3 | 4): string {
+function levelHref(level: GrassDropLevel): string {
   return `cG${level}`;
+}
+
+/** SMIL keyTimes must be strictly increasing; when `startMs === 0`, omit the duplicate leading `0`. */
+function smilDropTimeline(
+  startMs: number,
+  dropDurationMs: number,
+  cycleMs: number,
+  fallPx: number,
+): { keyTimes: string; translateValues: string; opValues: string } {
+  const a = startMs / cycleMs;
+  const b = (startMs + dropDurationMs) / cycleMs;
+  const r = Math.max(0, 1 - CYCLE_TAIL_RESET);
+  const fmt = (t: number): string => t.toFixed(6);
+  if (a <= Number.EPSILON) {
+    return {
+      keyTimes: `0;${fmt(b)};${fmt(r)};1`,
+      translateValues: `0,-${fallPx};0,0;0,0;0,-${fallPx}`,
+      opValues: `1;1;0;0`,
+    };
+  }
+  return {
+    keyTimes: `0;${fmt(a)};${fmt(b)};${fmt(r)};1`,
+    translateValues: `0,-${fallPx};0,-${fallPx};0,0;0,0;0,-${fallPx}`,
+    opValues: `0;1;1;0;0`,
+  };
 }
 
 function renderEmptyGrid(): string {
@@ -180,17 +205,11 @@ function renderGroupDrop(
 ): string {
   const fallPx = seg.fallOffsetCells * step;
   const { startMs, dropDurationMs } = seg;
-  const a = startMs / cycleMs;
-  const b = (startMs + dropDurationMs) / cycleMs;
-  const r = Math.max(0, 1 - CYCLE_TAIL_RESET);
-
-  const keyTimes = `0;${a.toFixed(6)};${b.toFixed(6)};${r.toFixed(6)};1`;
-  const translateValues = `0,-${fallPx};0,-${fallPx};0,0;0,0;0,-${fallPx}`;
-  const opValues = `0;1;1;0;0`;
+  const { keyTimes, translateValues, opValues } = smilDropTimeline(startMs, dropDurationMs, cycleMs, fallPx);
 
   const inner = seg.cells
     .map((c) => {
-      const href = levelHref(c.level as 1 | 2 | 3 | 4);
+      const href = levelHref(c.level);
       return cellUse(c.x, c.y, href);
     })
     .join("\n");
@@ -229,6 +248,7 @@ ${buildSymbols(safe)}
 <g id="emptyCells">
 ${renderEmptyGrid()}
 </g>
+<!-- grassDrops: animated non-zero cells only. All-zero boards keep this group empty (stable id for DOM/tests). -->
 <g id="grassDrops">
 ${drops}
 </g>

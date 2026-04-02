@@ -45,4 +45,30 @@ describe("buildGrassDropSvg", () => {
     expect(svg).toContain(PALETTE_LIGHT.canvas);
     expect(svg).toContain('id="cE"');
   });
+
+  it("keeps grassDrops present but empty when the board is all zeros (stable id)", () => {
+    const { board, meta } = contributionDaysToLevelBoard([]);
+    const segments = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const svg = buildGrassDropSvg(segments, PALETTE_DARK);
+    expect(svg).toContain('<g id="grassDrops">');
+    expect(svg).not.toContain("<animate");
+    expect(svg).toMatch(/<g id="grassDrops">\s*<\/g>/);
+  });
+
+  it("renders non-zero grass symbols with light palette fills", () => {
+    const { board, meta } = contributionDaysToLevelBoard(buildSampleContributionDays());
+    const segments = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const svg = buildGrassDropSvg(segments, PALETTE_LIGHT);
+    expect(svg).toContain(`fill="${PALETTE_LIGHT.level1}"`);
+    expect(svg).toContain(`fill="${PALETTE_LIGHT.level4}"`);
+    expect(svg).toContain('href="#cG1"');
+    expect(svg).toContain('href="#cG4"');
+  });
+
+  it("does not duplicate the leading keyTimes 0 when the first group starts at 0ms", () => {
+    const { board, meta } = contributionDaysToLevelBoard(buildSampleContributionDays());
+    const segments = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const svg = buildGrassDropSvg(segments, PALETTE_DARK);
+    expect(svg).not.toMatch(/keyTimes="0;0\.0+/);
+  });
 });

@@ -13,6 +13,9 @@ export type GroupIndex = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 /** 0 = no contributions (empty cell UI); 1..4 = GitHub contribution intensity. */
 export type GrassLevel = 0 | 1 | 2 | 3 | 4;
 
+/** Non-empty grass cell only (drop layers use this; empty grid uses level 0 elsewhere). */
+export type GrassDropLevel = Exclude<GrassLevel, 0>;
+
 /** Row-major board: `board[y][x]` — y weekday 0..6, x week column 0..52. */
 export type LevelBoard = GrassLevel[][];
 
@@ -25,7 +28,7 @@ export interface GrassCellMeta {
 export interface GrassCell {
   x: number;
   y: number;
-  level: GrassLevel;
+  level: GrassDropLevel;
   date: string;
   contributionCount: number;
 }

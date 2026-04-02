@@ -3,11 +3,8 @@ import { lstat, mkdir, open, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
-  buildSampleContributionDays,
-  contributionDaysToLevelBoard,
-  fetchContributionCalendar,
-  flattenContributionDays,
-  type ContributionDay,
+  contributionCalendarToLevelBoard,
+  fetchOrBuildContributionCalendar,
 } from "./io/contributions.js";
 import { buildGrassDropSvg, PALETTE_DARK, PALETTE_LIGHT, type GrassPalette } from "./renderer/svgRenderer.js";
 import { buildDropSchedule, splitBoardIntoColumnGroups } from "./grass/groupDropPlanner.js";
@@ -43,34 +40,6 @@ type FetchContributionOpts = Pick<
   GenerateOptions,
   "login" | "token" | "useSample" | "allowUnauthenticatedFallback"
 >;
-
-/**
- * Load contribution calendar days: GitHub API, or deterministic sample (offline / fallback).
- */
-export async function fetchOrBuildContributionDays(opts: FetchContributionOpts): Promise<ContributionDay[]> {
-  const { login, token, useSample, allowUnauthenticatedFallback = false } = opts;
-  if (useSample) {
-    console.warn("Using deterministic sample contributions (offline/sample mode).");
-    return buildSampleContributionDays();
-  }
-  try {
-    const cal = await fetchContributionCalendar(login, token);
-    return flattenContributionDays(cal);
-  } catch (e) {
-    if (!token) {
-      if (allowUnauthenticatedFallback) {
-        console.warn(
-          "GitHub fetch failed without token; falling back to sample contributions (TETRASS_ALLOW_UNAUTH_FALLBACK=1).",
-        );
-        return buildSampleContributionDays();
-      }
-      throw new Error(
-        "GitHub fetch failed with no GITHUB_TOKEN. Set GITHUB_TOKEN for real contribution data, use TETRASS_USE_SAMPLE=1 (or TETRASS_OFFLINE=1) for offline sample mode, or set TETRASS_ALLOW_UNAUTH_FALLBACK=1 for CLI-only opt-in when an unauthenticated fetch fails.",
-      );
-    }
-    throw new Error(`GitHub API request failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
 
 function resolveWorkspaceRoots(workspaceRoot: string | undefined): {
   workspaceRootResolved: string | null;
@@ -139,13 +108,13 @@ export async function runTetrassGenerate(opts: GenerateOptions): Promise<void> {
   const { login, token, outputs, useSample, workspaceRoot, allowUnauthenticatedFallback } = opts;
   if (outputs.length === 0) throw new Error("At least one output path is required.");
 
-  const days = await fetchOrBuildContributionDays({
+  const cal = await fetchOrBuildContributionCalendar({
     login,
     token,
     useSample,
     allowUnauthenticatedFallback,
   });
-  const { board, meta } = contributionDaysToLevelBoard(days);
+  const { board, meta } = contributionCalendarToLevelBoard(cal);
   const groups = splitBoardIntoColumnGroups(board, meta);
   const segments = buildDropSchedule(groups);
 
