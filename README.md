@@ -42,7 +42,7 @@ jobs:
 
 | Input | Required | Description |
 |--------|----------|-------------|
-| `github_user_name` | yes | Login whose **public** contribution calendar is fetched (GraphQL). |
+| `github_user_name` | yes | GitHub login whose public contribution calendar is used (strict week-grid correspondence). |
 | `outputs` | yes | Multiline paths relative to the repo root. Append `?palette=github-dark` for the dark theme (snk-compatible naming). |
 
 The action runs `node` on a bundled script; it does **not** require `npm ci` in the consumer workflow.
