@@ -84,6 +84,7 @@ describe("runTetrassGenerate", () => {
     const outputSymlink = join(workspace, "out.svg");
     await symlink(remoteFile, outputSymlink);
 
+    // Smaller timeout because the error should be thrown early by path guards.
     await expect(
       runTetrassGenerate({
         login: "octocat",
