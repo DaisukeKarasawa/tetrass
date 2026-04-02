@@ -185,7 +185,7 @@ function renderGroupDrop(
 
   const keyTimes = `0;${a.toFixed(6)};${b.toFixed(6)};${r.toFixed(6)};1`;
   const translateValues = `0,-${fallPx};0,-${fallPx};0,0;0,0;0,-${fallPx}`;
-  const opValues = `0;1;1;1;0`;
+  const opValues = `0;1;1;0;0`;
 
   const inner = seg.cells
     .map((c) => {

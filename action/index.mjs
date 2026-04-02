@@ -385,7 +385,7 @@ function renderGroupDrop(seg, cycleMs) {
   const r = Math.max(0, 1 - CYCLE_TAIL_RESET);
   const keyTimes = `0;${a.toFixed(6)};${b.toFixed(6)};${r.toFixed(6)};1`;
   const translateValues = `0,-${fallPx};0,-${fallPx};0,0;0,0;0,-${fallPx}`;
-  const opValues = `0;1;1;1;0`;
+  const opValues = `0;1;1;0;0`;
   const inner = seg.cells.map((c) => {
     const href = levelHref(c.level);
     return cellUse(c.x, c.y, href);
