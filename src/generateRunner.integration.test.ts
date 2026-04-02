@@ -57,7 +57,8 @@ describe("runTetrassGenerate (integration)", () => {
     expect(fast.usedTypes.size).toBeGreaterThanOrEqual(minTypes);
     expect(Buffer.byteLength(text, "utf8")).toBeLessThan(1_200_000);
     await rm(dir, { recursive: true, force: true });
-  }, 60000);
+    // Full pipeline + second planAndVerifyReplay for SVG/board assertions can exceed 60s on slow CI runners.
+  }, 120_000);
 
   it("uses fetch path when not in sample mode and writes SVG", async () => {
     const dir = await mkdtemp(join(tmpdir(), "tetrass-api-"));
@@ -76,7 +77,7 @@ describe("runTetrassGenerate (integration)", () => {
     const { grassTarget } = planAndVerifyReplay(buildSampleContributionDays());
     expect(() => assertSvgFinalBoardMatchesTarget(text, grassTarget)).not.toThrow();
     await rm(dir, { recursive: true, force: true });
-  }, 60000);
+  }, 120_000);
 
   it("keeps a non-empty grass target for sample contribution data", () => {
     const { grassTarget } = planAndVerifyReplay(buildSampleContributionDays());
