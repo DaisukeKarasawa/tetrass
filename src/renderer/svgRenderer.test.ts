@@ -28,7 +28,9 @@ describe("buildGrassDropSvg", () => {
     const groups = splitBoardIntoColumnGroups(board, meta);
     const segments = buildDropSchedule(groups);
     const svg = buildGrassDropSvg(segments, PALETTE_DARK);
+    const svg2 = buildGrassDropSvg(segments, PALETTE_DARK);
 
+    expect(svg).toBe(svg2);
     expect(svg).toContain('repeatCount="indefinite"');
     expect(svg).toContain('id="cG1"');
     expect(svg).toContain('id="cG4"');
