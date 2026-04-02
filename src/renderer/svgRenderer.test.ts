@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { GRID_VISIBLE_WEEKS, GRID_WEEKDAYS } from "../domain/grass.js";
 import { buildDropSchedule, splitBoardIntoColumnGroups } from "../grass/groupDropPlanner.js";
 import { buildSampleContributionDays, contributionDaysToLevelBoard } from "../io/contributions.js";
 import { buildGrassDropSvg, PALETTE_DARK, PALETTE_LIGHT, sanitizeGrassPalette, validateColor } from "./svgRenderer.js";
@@ -17,6 +18,12 @@ describe("validateColor / sanitizeGrassPalette", () => {
 
 describe("buildGrassDropSvg", () => {
   it("emits a looping SVG with level symbols and expected dimensions", () => {
+    /** Keep in sync with `svgRenderer`: 18px cell + 2px gutter, PAD 2 */
+    const step = 20;
+    const pad = 2;
+    const boardW = GRID_VISIBLE_WEEKS * step + pad * 2;
+    const boardH = GRID_WEEKDAYS * step + pad * 2;
+
     const { board, meta } = contributionDaysToLevelBoard(buildSampleContributionDays());
     const groups = splitBoardIntoColumnGroups(board, meta);
     const segments = buildDropSchedule(groups);
@@ -26,8 +33,9 @@ describe("buildGrassDropSvg", () => {
     expect(svg).toContain('id="cG1"');
     expect(svg).toContain('id="cG4"');
     expect(svg).toContain('id="grassDrops"');
-    expect(svg).toContain('width="958"');
-    expect(svg).toContain('height="130"');
+    expect(svg).toContain(`width="${boardW}"`);
+    expect(svg).toContain(`height="${boardH}"`);
+    expect(svg).toContain(`viewBox="0 0 ${boardW} ${boardH}"`);
   });
 
   it("uses light canvas and empty cell colors", () => {
