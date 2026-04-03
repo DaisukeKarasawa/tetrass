@@ -1,6 +1,6 @@
 /**
  * Canonical group-local grass coordinates (source of truth for shape tests).
- * Convention: (col, row) with col 1..6 (or 1..5 in band 9), row 1..7 = Sunday..Saturday
+ * Convention: (col, row) with col 1..6 (or 1..5 in band 8), row 1..7 = Sunday..Saturday
  * matching GitHub weekday 0 at row 1.
  */
 import type { GroupIndex } from "../domain/grass.js";
