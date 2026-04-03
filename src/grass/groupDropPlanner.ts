@@ -143,10 +143,15 @@ export function splitBoardIntoColumnGroups(board: LevelBoard, meta: GrassCellMet
 /**
  * Build strict left-to-right group drop: within each group, columns run in parallel;
  * each column drops bottom grass first, then upper, with discrete row steps.
+ *
+ * Groups are processed in ascending {@link GrassColumnGroup.xStart} so schedule order
+ * stays left-to-right even if the caller passes a shuffled array (e.g. not from
+ * {@link splitBoardIntoColumnGroups}).
  */
 export function buildStrictDropSchedule(groups: GrassColumnGroup[]): GrassStrictSchedule {
+  const orderedBands = [...groups].sort((a, b) => a.xStart - b.xStart || a.index - b.index);
   const allPlacements: GrassPlacement[][] = [];
-  for (const g of groups) {
+  for (const g of orderedBands) {
     const gf = buildGroupFrames(g);
     for (const p of gf) {
       allPlacements.push(p);

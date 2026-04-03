@@ -315,8 +315,9 @@ function splitBoardIntoColumnGroups(board, meta) {
   return groups;
 }
 function buildStrictDropSchedule(groups) {
+  const orderedBands = [...groups].sort((a, b) => a.xStart - b.xStart || a.index - b.index);
   const allPlacements = [];
-  for (const g of groups) {
+  for (const g of orderedBands) {
     const gf = buildGroupFrames(g);
     for (const p of gf) {
       allPlacements.push(p);
