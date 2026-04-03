@@ -116,7 +116,7 @@ export async function runTetrassGenerate(opts: GenerateOptions): Promise<void> {
   });
   const { board, meta } = contributionCalendarToLevelBoard(cal);
   const groups = splitBoardIntoColumnGroups(board, meta);
-  const schedule = buildDropSchedule(groups);
+  const schedule = buildDropSchedule(board, groups);
 
   const { workspaceRootResolved, workspaceRootCanonical } = resolveWorkspaceRoots(workspaceRoot);
   const outputsForRender =

@@ -1,4 +1,4 @@
-import type { GrassDropLevel, GrassPlacement, GrassStrictSchedule } from "../domain/grass.js";
+import type { GrassLevel, GrassStrictSchedule } from "../domain/grass.js";
 import { GRID_VISIBLE_WEEKS, GRID_WEEKDAYS } from "../domain/grass.js";
 import { totalCycleMs } from "../grass/groupDropPlanner.js";
 
@@ -93,7 +93,7 @@ function validateAlphaChannel(part: string): boolean {
 function isValidRgbFunction(value: string): boolean {
   const m = /^rgb\(\s*([^)]+)\)$/i.exec(value);
   if (!m) return false;
-  const parts = m[1].split(",").map((x) => x.trim());
+  const parts = m[1]!.split(",").map((x) => x.trim());
   if (parts.length !== 3) return false;
   return parts.every(validateRgbLikeChannel);
 }
@@ -101,7 +101,7 @@ function isValidRgbFunction(value: string): boolean {
 function isValidRgbaFunction(value: string): boolean {
   const m = /^rgba\(\s*([^)]+)\)$/i.exec(value);
   if (!m) return false;
-  const parts = m[1].split(",").map((x) => x.trim());
+  const parts = m[1]!.split(",").map((x) => x.trim());
   if (parts.length !== 4) return false;
   const [r, g, b, a] = parts;
   return validateRgbLikeChannel(r) && validateRgbLikeChannel(g) && validateRgbLikeChannel(b) && validateAlphaChannel(a);
@@ -170,50 +170,27 @@ ${sym("cG4", l4)}
 </defs>`;
 }
 
-function levelHref(level: GrassDropLevel): string {
-  return `cG${level}`;
-}
-
-/** Pre-indexed frame placements: frameIndex → "sx,sy" → placement. */
-type FramePlacementIndex = Map<string, GrassPlacement>[];
-
-function buildFrameIndex(schedule: GrassStrictSchedule): FramePlacementIndex {
-  return schedule.frames.map((fr) => {
-    const m = new Map<string, GrassPlacement>();
-    for (const p of fr.placements) {
-      m.set(`${p.sourceX},${p.sourceY}`, p);
-    }
-    return m;
-  });
-}
-
-function placementForFrame(
-  sx: number,
-  sy: number,
-  frameIndex: number,
-  index: FramePlacementIndex,
-): { absY: number; visible: boolean } | null {
-  if (frameIndex < 0 || frameIndex >= index.length) return null;
-  const p = index[frameIndex]!.get(`${sx},${sy}`);
-  if (!p) return { absY: sy, visible: false };
-  return { absY: p.absY, visible: true };
-}
-
-function buildCellSmil(
-  sx: number,
-  sy: number,
-  schedule: GrassStrictSchedule,
-  frameIndex: FramePlacementIndex,
-  cycleMs: number,
-): { keyTimes: string; opValues: string; tyValues: string } {
-  const F = schedule.frames.length;
-  const stepMs = schedule.stepDurationMs;
-  const fmt = (t: number): string => t.toFixed(6);
-
-  if (F === 0) {
-    return { keyTimes: "0;1", opValues: "0;0", tyValues: "0 0;0 0" };
+function levelColor(p: GrassPalette, level: GrassLevel): string {
+  switch (level) {
+    case 0:
+      return p.emptyCell;
+    case 1:
+      return p.level1;
+    case 2:
+      return p.level2;
+    case 3:
+      return p.level3;
+    case 4:
+      return p.level4;
+    default:
+      return p.emptyCell;
   }
+}
 
+function smilKeyTimesAndFrameIndices(F: number, stepMs: number, cycleMs: number): { keyTimes: string; indices: number[] } {
+  if (F <= 0) {
+    return { keyTimes: "0;1", indices: [0, 0] };
+  }
   const g = SMIL_KEY_GAP;
   const rTail = Math.max(0, 1 - CYCLE_TAIL_RESET);
   const fracs: number[] = [0];
@@ -223,46 +200,23 @@ function buildCellSmil(
   }
   fracs.push(Math.max(fracs[fracs.length - 1]! + g, Math.min(rTail, 1 - 2 * g)));
   fracs.push(1);
-
-  const opVals: string[] = [];
-  const tyVals: string[] = [];
   const n = fracs.length;
+  const indices: number[] = [];
   for (let k = 0; k < n; k++) {
     let frameIdx: number;
     if (k <= F - 1) frameIdx = k;
     else if (k === n - 2) frameIdx = 0;
     else if (k === n - 1) frameIdx = 0;
     else frameIdx = F - 1;
-
-    const st = placementForFrame(sx, sy, frameIdx, frameIndex);
-    if (!st || !st.visible) {
-      opVals.push("0");
-      tyVals.push("0 0");
-    } else {
-      opVals.push("1");
-      tyVals.push(`0 ${(st.absY - sy) * STEP}`);
-    }
+    indices.push(frameIdx);
   }
-
   return {
-    keyTimes: fracs.map(fmt).join(";"),
-    opValues: opVals.join(";"),
-    tyValues: tyVals.join(";"),
+    keyTimes: fracs.map((t) => t.toFixed(6)).join(";"),
+    indices,
   };
 }
 
-function collectSourceCells(schedule: GrassStrictSchedule): Map<string, GrassDropLevel> {
-  const m = new Map<string, GrassDropLevel>();
-  for (const fr of schedule.frames) {
-    for (const p of fr.placements) {
-      const k = `${p.sourceX},${p.sourceY}`;
-      if (!m.has(k)) m.set(k, p.level);
-    }
-  }
-  return m;
-}
-
-function renderEmptyGrid(): string {
+function renderEmptyGridUses(): string {
   let s = "";
   for (let y = 0; y < GRID_WEEKDAYS; y++) {
     for (let x = 0; x < GRID_VISIBLE_WEEKS; x++) {
@@ -272,60 +226,57 @@ function renderEmptyGrid(): string {
   return s;
 }
 
-function renderAnimatedGrassCell(
-  sx: number,
-  sy: number,
-  level: GrassDropLevel,
-  schedule: GrassStrictSchedule,
-  frameIndex: FramePlacementIndex,
-  cycleMs: number,
-): string {
-  const { keyTimes, opValues, tyValues } = buildCellSmil(sx, sy, schedule, frameIndex, cycleMs);
-  const href = levelHref(level);
-  return `<g>
-<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes}" values="${opValues}"/>
-<g>
-<animateTransform attributeName="transform" type="translate" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes}" values="${tyValues}"/>
-${cellUse(sx, sy, href)}
-</g>
-</g>`;
-}
-
 /**
- * Animated SVG: empty grid + strict per-cell drop timeline (left groups, parallel columns).
+ * Animated SVG: each cell is a rect whose fill steps through {@link GrassStrictSchedule.frames}
+ * (full 53×7 boards, including the leading all-empty frame).
  */
 export function buildGrassDropSvg(schedule: GrassStrictSchedule, palette: GrassPalette): string {
   const safe = sanitizeGrassPalette(palette);
   const cycleMs = totalCycleMs(schedule);
+  const F = schedule.frames.length;
   const boardW = GRID_VISIBLE_WEEKS * STEP + PAD * 2;
   const boardH = GRID_WEEKDAYS * STEP + PAD * 2;
 
-  const fIdx = buildFrameIndex(schedule);
-  const sources = collectSourceCells(schedule);
-  const drops = [...sources.entries()]
-    .sort((a, b) => {
-      const [ax, ay] = a[0].split(",").map(Number);
-      const [bx, by] = b[0].split(",").map(Number);
-      if (ax !== bx) return ax - bx;
-      return ay - by;
-    })
-    .map(([key, lvl]) => {
-      const [sx, sy] = key.split(",").map(Number) as [number, number];
-      return renderAnimatedGrassCell(sx, sy, lvl, schedule, fIdx, cycleMs);
-    })
-    .join("\n");
-
-  return `<?xml version="1.0" encoding="UTF-8"?>
+  if (F === 0) {
+    return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${boardW}" height="${boardH}" viewBox="0 0 ${boardW} ${boardH}" role="img" aria-label="Contribution graph animation">
 <title>Tetrass</title>
 ${buildSymbols(safe)}
 <rect width="100%" height="100%" fill="${safe.canvas}"/>
 <g id="emptyCells">
-${renderEmptyGrid()}
+${renderEmptyGridUses()}
 </g>
-<!-- grassDrops: animated non-zero cells only. All-zero boards keep this group empty (stable id for DOM/tests). -->
-<g id="grassDrops">
-${drops}
-</g>
+<g id="grassDrops"></g>
+</svg>`;
+  }
+
+  const { keyTimes, indices } = smilKeyTimesAndFrameIndices(F, schedule.stepDurationMs, cycleMs);
+  const frames = schedule.frames;
+
+  const fillValuesForCell = (x: number, y: number): string =>
+    indices
+      .map((fi) => validateColor(levelColor(safe, frames[fi]![y]![x]!)))
+      .join(";");
+
+  let rects = "";
+  for (let y = 0; y < GRID_WEEKDAYS; y++) {
+    for (let x = 0; x < GRID_VISIBLE_WEEKS; x++) {
+      const { px, py } = cellBasePx(x, y);
+      const values = fillValuesForCell(x, y);
+      const first = values.split(";")[0]!;
+      rects += `<rect x="${px}" y="${py}" width="${DOT_SIZE}" height="${DOT_SIZE}" rx="${RX}" stroke="${safe.cellBorder}" stroke-width="${STROKE_WIDTH}" fill="${first}">
+<animate attributeName="fill" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes}" values="${values}"/>
+</rect>
+`;
+    }
+  }
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${boardW}" height="${boardH}" viewBox="0 0 ${boardW} ${boardH}" role="img" aria-label="Contribution graph animation">
+<title>Tetrass</title>
+<rect width="100%" height="100%" fill="${safe.canvas}"/>
+<g id="emptyCells">
+${rects}</g>
+<g id="grassDrops"></g>
 </svg>`;
 }

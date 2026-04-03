@@ -4,8 +4,10 @@ import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import { GRID_VISIBLE_WEEKS, GRID_WEEKDAYS } from "../domain/grass.js";
 import { runTetrassGenerate } from "../generateRunner.js";
 import { buildSampleContributionDays, contributionDaysToLevelBoard } from "../io/contributions.js";
+import { PALETTE_DARK } from "../renderer/svgRenderer.js";
 
 describe("grass pipeline integration", () => {
   it("writes SVG whose grass cell count matches the level board", async () => {
@@ -27,8 +29,12 @@ describe("grass pipeline integration", () => {
           if (board[y]![x]! > 0) grass++;
         }
       }
-      const uses = [...svg.matchAll(/<use href="#cG[1-4]"/g)];
-      expect(uses.length).toBe(grass);
+      expect(grass).toBeGreaterThan(0);
+      /** One rounded rect per cell + full-canvas background (see svgRenderer). */
+      const rects = [...svg.matchAll(/<rect/g)];
+      expect(rects.length).toBe(GRID_WEEKDAYS * GRID_VISIBLE_WEEKS + 1);
+      expect(svg).toContain('attributeName="fill"');
+      expect(svg).toContain(PALETTE_DARK.level1);
     } finally {
       await rm(ws, { recursive: true, force: true });
     }

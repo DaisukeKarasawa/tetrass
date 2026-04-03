@@ -19,7 +19,7 @@ import { buildGrassDropSvg, PALETTE_LIGHT } from "./renderer/svgRenderer.js";
 
 /**
  * Evidence for CodeRabbit "Determinism invariants evidence":
- * - Stable GitHub API contributionLevel → level board → rendered grass symbol hrefs.
+ * - Stable GitHub API contributionLevel → level board → rendered SMIL fill timeline.
  * - Nine-band column partition + strict discrete schedule stability for the same input.
  */
 
@@ -36,7 +36,7 @@ describe("Determinism: API contributionLevel → board → SVG symbols", () => {
     expect(ALL_API_LEVELS.map(contributionLevelToGrassLevel)).toEqual([0, 1, 2, 3, 4]);
   });
 
-  it("maps GraphQL calendar weeks to board cells and grassDrops use matching #cG1..#cG4 hrefs", () => {
+  it("maps GraphQL calendar weeks to board cells and SVG uses palette greens in fill animation", () => {
     const cal: ContributionCalendar = {
       weeks: [
         {
@@ -59,18 +59,14 @@ describe("Determinism: API contributionLevel → board → SVG symbols", () => {
     expect(board[3]![x]).toBe(4);
     expect(board[4]![x]).toBe(0);
 
-    const schedule = buildStrictDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const schedule = buildStrictDropSchedule(board, splitBoardIntoColumnGroups(board, meta));
     const svg = buildGrassDropSvg(schedule, PALETTE_LIGHT);
 
-    const grassStart = svg.indexOf('<g id="grassDrops">');
-    expect(grassStart).toBeGreaterThan(-1);
-    const grassSlice = svg.slice(grassStart);
-
-    expect(grassSlice).toContain('href="#cG1"');
-    expect(grassSlice).toContain('href="#cG2"');
-    expect(grassSlice).toContain('href="#cG3"');
-    expect(grassSlice).toContain('href="#cG4"');
-    expect(grassSlice).not.toContain('href="#cG0"');
+    expect(svg).toContain(PALETTE_LIGHT.level1);
+    expect(svg).toContain(PALETTE_LIGHT.level2);
+    expect(svg).toContain(PALETTE_LIGHT.level3);
+    expect(svg).toContain(PALETTE_LIGHT.level4);
+    expect(svg).toContain('attributeName="fill"');
   });
 });
 
@@ -110,13 +106,13 @@ describe("Determinism: nine-band schedule & strict discrete model", () => {
     const { board, meta } = createOneCellPerBandFixture();
     const g1 = splitBoardIntoColumnGroups(board, meta);
     const g2 = splitBoardIntoColumnGroups(board, meta);
-    expect(buildStrictDropSchedule(g1)).toEqual(buildStrictDropSchedule(g2));
+    expect(buildStrictDropSchedule(board, g1)).toEqual(buildStrictDropSchedule(board, g2));
   });
 
   it("keeps a golden frame count for the 9-band one-cell-per-band fixture (regression guard)", () => {
     const { board, meta } = createOneCellPerBandFixture();
-    const schedule = buildStrictDropSchedule(splitBoardIntoColumnGroups(board, meta));
-    /** One discrete frame per group (single y=0 cell at each band's xStart). */
-    expect(schedule.frames).toHaveLength(9);
+    const schedule = buildStrictDropSchedule(board, splitBoardIntoColumnGroups(board, meta));
+    /** Leading empty frame + one discrete frame per group (single y=0 cell at each band's xStart). */
+    expect(schedule.frames).toHaveLength(10);
   });
 });

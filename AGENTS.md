@@ -1,8 +1,12 @@
 # AGENTS.md
 
+## Premise (non-negotiable)
+
+**The contribution heatmap must match the grass graph GitHub shows on the profile Overview** for the same user and time window: same **53×7** visible grid, same **week column / weekday** placement, and same **`contributionLevel` → intensity `0..4`** per cell. Tetrass only adds a scripted drop **animation** on top of that board; it must not invent, omit, or remap cells relative to Overview.
+
 ## Repository purpose
 
-This repository generates **deterministic animated SVGs** of a GitHub-style contribution graph from GitHub contribution data, and publishes them as:
+This repository generates **deterministic animated SVGs** of that Overview-equivalent contribution graph from GitHub contribution data, and publishes them as:
 
 - a CLI flow (`src/main.ts` -> `src/generateRunner.ts`)
 - a composite GitHub Action (`action/action.yml` + generated `action/index.mjs`)
@@ -10,7 +14,8 @@ This repository generates **deterministic animated SVGs** of a GitHub-style cont
 ## Project layout (high signal)
 
 - `src/domain/grass.ts`: grid size constants, level board types, nine-band column ranges
-- `src/grass/groupDropPlanner.ts`: split level board into column groups + drop timeline
+- `src/grass/groupDropPlanner.ts`: split level board into column groups; re-exports schedule builders
+- `src/grass/scriptedDropPlanner.ts`: scripted discrete drop timeline (per-column fall + parallel merge within each band)
 - `src/io/contributions.ts`: GitHub GraphQL fetch, `contributionLevel` mapping, sample data
 - `src/renderer/svgRenderer.ts`: SMIL group-drop SVG (light/dark palettes)
 - `src/generateRunner.ts`: orchestration, output path safety, writes
@@ -34,7 +39,13 @@ Prioritize **P0/P1** regressions for correctness and safety.
    - `contributionLevel` → level `0..4` mapping or 53×7 placement wrong vs GitHub week grid.
 
 2. **Nine-band split / animation order**
-   - Column bands not `6×8 + 5`, or drop order not left-to-right sequential.
+   - Column bands not eight `6`-column bands + one `5`-column band (`GROUP_COLUMN_COUNTS`), or drop order not left-to-right sequential.
+
+## Coordinates and scripted drop (for contributors)
+
+- **Level board**: `board[y][x]` with `y = 0..6` = GitHub GraphQL `contributionDays.weekday` (0 = Sunday … 6 = Saturday), `x = 0..52` = week column in the visible 53-week viewport (oldest visible week at smaller `x` after right-padding).
+- **Band (“group”) local coords** (docs / issues only; code uses absolute `x`): often written as `(column, row)` with **1-based** column within the band and **1-based** row where **row 1 = Sunday** (same as API weekday 0). Example: local `(3, 1)` = third week column of the band, Sunday = absolute `(xStart + 2, 0)`.
+- **Scripted drop model** (`buildScriptedStrictDropSchedule`): nine bands run **strictly left → right**. Inside one band, each week column animates independently: non-empty cells in that column fall in **discrete row steps**, **larger `y` (later weekday) settles before smaller `y`**. All columns in the band share a **common frame index**; shorter columns **hold** their last state (parallel merge). When any grass exists, the first global frame is an **all-zero 53×7 board** so the SVG loop starts on an all-grey grid. Canonical Overview-shaped coordinate lists for tests live in `src/grass/overviewGrassCoords.ts`.
 
 3. **Determinism**
    - Same calendar input must yield the same SVG string (modulo irrelevant whitespace if any).
