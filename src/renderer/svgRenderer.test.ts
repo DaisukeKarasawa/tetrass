@@ -31,6 +31,19 @@ describe("validateColor / sanitizeGrassPalette", () => {
 });
 
 describe("buildGrassDropSvg", () => {
+  it("uses tx,ty pairs for translate animateTransform values (vertical motion, not horizontal)", () => {
+    const { board, meta } = contributionDaysToLevelBoard(buildSampleContributionDays());
+    const segments = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const svg = buildGrassDropSvg(segments, PALETTE_DARK);
+    const translateValues = [...svg.matchAll(/type="translate"[^>]*values="([^"]*)"/g)].map((m) => m[1]!);
+    expect(translateValues.length).toBeGreaterThan(0);
+    for (const vals of translateValues) {
+      for (const pair of vals.split(";")) {
+        expect(pair).toMatch(/^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?$/);
+      }
+    }
+  });
+
   it("emits a looping SVG with level symbols and expected dimensions", () => {
     /** Keep in sync with `svgRenderer`: 18px cell + 2px gutter, PAD 2 */
     const step = 20;
