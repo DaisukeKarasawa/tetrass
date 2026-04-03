@@ -10,8 +10,8 @@ import {
   totalCycleMs,
 } from "./groupDropPlanner.js";
 import { contributionDaysToLevelBoard, type ContributionDay } from "../io/contributions.js";
-import { expectedBand1FourGrassStrictFrames, normalizePlacements } from "./scriptedDropGolden.js";
-import { expectedGroup0TwoCellColumnFrames, normalizeGolden } from "./strictDropFixture.js";
+import { expectedBand1FourGrassStrictFrames } from "./scriptedDropGolden.js";
+import { expectedGroup0TwoCellColumnFrames, levelBoardFromGoldenCells } from "./strictDropFixture.js";
 
 describe("groupColumnRanges", () => {
   it("sums to 53 columns with eight 6-wide bands and one 5-wide", () => {
@@ -79,21 +79,11 @@ describe("buildStrictDropSchedule / golden group0", () => {
       })),
     );
     const groups = splitBoardIntoColumnGroups(board, meta);
-    const schedule = buildStrictDropSchedule(groups);
+    const schedule = buildStrictDropSchedule(board, groups);
     expect(schedule.frames).toHaveLength(8);
-    expect(schedule.frames[0]!.placements).toEqual([]);
     const expected = expectedGroup0TwoCellColumnFrames();
     for (let i = 0; i < 8; i++) {
-      const got = normalizeGolden(
-        schedule.frames[i]!.placements.map((p) => ({
-          displayX: p.absX,
-          displayY: p.absY,
-          sourceX: p.sourceX,
-          sourceY: p.sourceY,
-          level: p.level,
-        })),
-      );
-      expect(got).toEqual(normalizeGolden(expected[i]!));
+      expect(schedule.frames[i]).toEqual(levelBoardFromGoldenCells(expected[i]!));
     }
   });
 });
@@ -111,28 +101,36 @@ describe("scripted drop / band 1 four-grass golden", () => {
         contributionCount: board[y]![x]! > 0 ? 1 : 0,
       })),
     );
-    const schedule = buildStrictDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const groups = splitBoardIntoColumnGroups(board, meta);
+    const schedule = buildStrictDropSchedule(board, groups);
     const expected = expectedBand1FourGrassStrictFrames();
     expect(schedule.frames).toHaveLength(expected.length);
     for (let i = 0; i < expected.length; i++) {
-      expect(normalizePlacements(schedule.frames[i]!.placements)).toEqual(
-        normalizePlacements(expected[i]!.placements),
-      );
+      expect(schedule.frames[i]).toEqual(expected[i]!);
     }
   });
 });
 
+function hasGrassInXRange(fr: ReturnType<typeof createEmptyLevelBoard>, xMin: number, xMax: number): boolean {
+  for (let y = 0; y < fr.length; y++) {
+    for (let x = xMin; x <= xMax; x++) {
+      if (fr[y]![x]! > 0) return true;
+    }
+  }
+  return false;
+}
+
 describe("buildDropSchedule", () => {
-  it("returns a schedule with step duration and nine group-derived frame chunks", () => {
+  it("returns a schedule with step duration and no frames when the board is all zeros", () => {
     const { board, meta } = contributionDaysToLevelBoard([]);
     const groups = splitBoardIntoColumnGroups(board, meta);
-    const schedule = buildDropSchedule(groups);
+    const schedule = buildDropSchedule(board, groups);
     expect(schedule.stepDurationMs).toBe(STRICT_STEP_MS);
     expect(schedule.frames).toHaveLength(0);
     expect(schedule.holdAfterLastMs).toBe(HOLD_AFTER_LAST_MS);
   });
 
-  it("runs groups strictly left-to-right: later group frames never appear before earlier group finishes", () => {
+  it("runs groups strictly left-to-right: band-1 grass implies band-0 columns already match the final board", () => {
     const board = createEmptyLevelBoard();
     board[0]![0] = 1;
     board[0]![6] = 1;
@@ -142,30 +140,23 @@ describe("buildDropSchedule", () => {
         contributionCount: board[y]![x]! > 0 ? 1 : 0,
       })),
     );
-    const schedule = buildStrictDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const groups = splitBoardIntoColumnGroups(board, meta);
+    const schedule = buildStrictDropSchedule(board, groups);
     expect(schedule.frames.length).toBeGreaterThanOrEqual(2);
-    const firstGroupXMax = groupColumnRanges()[0]!.xEndInclusive;
-    const secondGroupXMin = groupColumnRanges()[1]!.xStart;
-    let seenSecond = false;
+    const r0 = groupColumnRanges()[0]!;
+    const r1 = groupColumnRanges()[1]!;
+    let seenBand1Grass = false;
     for (const fr of schedule.frames) {
-      const hasSecond = fr.placements.some((p) => p.absX >= secondGroupXMin);
-      const hasFirst = fr.placements.some((p) => p.absX <= firstGroupXMax);
-      if (hasSecond) seenSecond = true;
-      if (hasFirst && seenSecond) {
-        throw new Error("Expected group 0 to finish before group 1 placements appear");
+      if (hasGrassInXRange(fr, r1.xStart, r1.xEndInclusive)) {
+        seenBand1Grass = true;
+        for (let y = 0; y < fr.length; y++) {
+          for (let x = r0.xStart; x <= r0.xEndInclusive; x++) {
+            expect(fr[y]![x]).toBe(board[y]![x]!);
+          }
+        }
       }
     }
-    const idxSecond = schedule.frames.findIndex((fr) =>
-      fr.placements.some((p) => p.absX >= secondGroupXMin),
-    );
-    let idxFirstLast = -1;
-    for (let i = schedule.frames.length - 1; i >= 0; i--) {
-      if (schedule.frames[i]!.placements.some((p) => p.absX <= firstGroupXMax)) {
-        idxFirstLast = i;
-        break;
-      }
-    }
-    expect(idxSecond).toBeGreaterThan(idxFirstLast);
+    expect(seenBand1Grass).toBe(true);
   });
 });
 
@@ -178,7 +169,7 @@ describe("totalCycleMs", () => {
 
   it("extends through all frames plus hold", () => {
     const { board, meta } = contributionDaysToLevelBoard([]);
-    const schedule = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const schedule = buildDropSchedule(board, splitBoardIntoColumnGroups(board, meta));
     expect(totalCycleMs(schedule)).toBe(schedule.frames.length * STRICT_STEP_MS + HOLD_AFTER_LAST_MS);
   });
 
@@ -192,7 +183,7 @@ describe("totalCycleMs", () => {
         contributionCount: board[y]![x]! > 0 ? 1 : 0,
       })),
     );
-    const schedule = buildStrictDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const schedule = buildStrictDropSchedule(board, splitBoardIntoColumnGroups(board, meta));
     expect(totalCycleMs(schedule)).toBe(8 * STRICT_STEP_MS + HOLD_AFTER_LAST_MS);
   });
 });

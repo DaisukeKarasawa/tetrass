@@ -41,29 +41,15 @@ export interface GrassColumnGroup {
   cells: GrassCell[];
 }
 
-/** One visible grass tile: drawn at (absX, absY) using color/level from source (sourceX, sourceY). */
-export interface GrassPlacement {
-  absX: number;
-  absY: number;
-  sourceX: number;
-  sourceY: number;
-  level: GrassDropLevel;
-}
-
-/** One timestep of the strict drop animation (global, all groups concatenated). */
-export interface StrictDropFrame {
-  placements: GrassPlacement[];
-}
-
 /**
- * Full SMIL timeline: discrete frames of equal duration, then hold, then loop.
- * Built from nine column groups processed left → right.
- * When non-empty, {@link StrictDropFrame.placements} for index 0 is always empty (all-grey start).
+ * Full-grid SMIL timeline: each entry is the visible 53×7 heatmap for one discrete step.
+ * `frames[0]` is always all zeros (empty-cell UI everywhere).
+ * Columns left of the animating band match the final `board`; columns right of the band are zero until their band runs.
  */
 export interface GrassStrictSchedule {
   stepDurationMs: number;
-  frames: StrictDropFrame[];
   holdAfterLastMs: number;
+  frames: LevelBoard[];
 }
 
 export function assertGroupColumnCounts(): void {

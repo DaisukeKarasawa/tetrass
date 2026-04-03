@@ -1,123 +1,129 @@
-import type {
-  GrassCell,
-  GrassColumnGroup,
-  GrassDropLevel,
-  GrassPlacement,
-  GrassStrictSchedule,
-  StrictDropFrame,
-} from "../domain/grass.js";
+import type { GrassCell, GrassColumnGroup, GrassDropLevel, GrassLevel, GrassStrictSchedule, LevelBoard } from "../domain/grass.js";
+import { GRID_VISIBLE_WEEKS, GRID_WEEKDAYS, createEmptyLevelBoard } from "../domain/grass.js";
 
 /** Duration of each discrete frame in the strict drop timeline. */
 export const STRICT_STEP_MS = 80;
 /** Hold the completed board before looping. */
 export const HOLD_AFTER_LAST_MS = 1800;
 
-type CellRef = { sx: number; sy: number; level: GrassDropLevel };
+/** Per-column frame: weekday row y (0..6) → level at that display row. */
+type ColSnapshot = Map<number, GrassLevel>;
 
-/** One column's timeline: each entry is displayRow -> source ref for that frame. */
-type ColumnFrame = Map<number, CellRef>;
+function cellAtY(cellsInCol: GrassCell[], y: number): GrassCell {
+  const c = cellsInCol.find((x) => x.y === y);
+  if (!c) throw new Error(`Missing grass cell at weekday y=${y}`);
+  return c;
+}
 
 /**
- * Scripted drop (per column): for each week column, non-empty cells fall in discrete row steps.
- * Within a column, lower rows (larger y / later weekdays) settle first; upper cells then fall
- * through empty display slots above them. Between columns in the same band, timelines advance in
- * lockstep (shared frame index); shorter columns hold their last state (parallel merge).
+ * Within one week column: larger y (later weekday) settles before smaller y.
+ * Each falling cell appears at display row 0 and steps down until it lands; then the next source row animates.
  */
-function columnTimeline(absX: number, cellsInCol: GrassCell[]): ColumnFrame[] {
+function columnSnapshots(cellsInCol: GrassCell[]): ColSnapshot[] {
   if (cellsInCol.length === 0) return [];
+
   const ys = [...new Set(cellsInCol.map((c) => c.y))].sort((a, b) => a - b);
-  const missions = [...ys].reverse();
+  const missions = [...ys].sort((a, b) => b - a);
   const settled = new Set<number>();
-  const frames: ColumnFrame[] = [];
+  const frames: ColSnapshot[] = [];
 
-  const cellAtY = (y: number): GrassCell => cellsInCol.find((c) => c.y === y)!;
+  const levelAt = (y: number): GrassDropLevel => cellAtY(cellsInCol, y).level;
 
-  const settledMap = (): ColumnFrame => {
-    const m = new Map<number, CellRef>();
+  const settledSnap = (): ColSnapshot => {
+    const m = new Map<number, GrassLevel>();
     for (const y of [...settled].sort((a, b) => a - b)) {
-      const c = cellAtY(y);
-      m.set(y, { sx: absX, sy: y, level: c.level });
+      m.set(y, levelAt(y));
     }
     return m;
   };
 
   for (let mi = 0; mi < missions.length; mi++) {
     const y_t = missions[mi]!;
-    const c = cellAtY(y_t);
+    const lvl = levelAt(y_t);
     for (let d = 0; d < y_t; d++) {
-      const pl = settledMap();
-      pl.set(d, { sx: absX, sy: y_t, level: c.level });
+      const pl = new Map<number, GrassLevel>(settledSnap());
+      pl.set(d, lvl);
       frames.push(pl);
     }
     settled.add(y_t);
     const nextY = missions[mi + 1];
-    if (nextY === undefined) {
-      frames.push(settledMap());
-    } else if (nextY > 0) {
-      frames.push(settledMap());
+    // Hold settled-only before the next mission so parallel bands stay aligned (shorter columns
+    // wait on the grid). Skip when the next cell is Sunday (y=0): two-cell column golden needs
+    // Saturday to land and Sunday to appear in adjacent steps without an extra hold-only frame.
+    if (nextY !== undefined && nextY > 0) {
+      frames.push(settledSnap());
     }
   }
+  frames.push(settledSnap());
   return frames;
 }
 
-function mergeColumnFrames(timelines: { absX: number; frames: ColumnFrame[] }[]): GrassPlacement[][] {
-  const maxLen = timelines.reduce((m, t) => Math.max(m, t.frames.length), 0);
+function colStateAt(snapshots: ColSnapshot[], stepIndex: number): ColSnapshot {
+  if (snapshots.length === 0) return new Map();
+  const idx = Math.min(stepIndex, snapshots.length - 1);
+  return snapshots[idx]!;
+}
+
+function buildGroupLevelBoardFrames(g: GrassColumnGroup, board: LevelBoard): LevelBoard[] {
+  const { xStart, xEndInclusive } = g;
+  const colSnaps: ColSnapshot[][] = [];
+  for (let x = xStart; x <= xEndInclusive; x++) {
+    const cells = g.cells.filter((c) => c.x === x);
+    colSnaps.push(columnSnapshots(cells));
+  }
+
+  const maxLen = colSnaps.reduce((m, arr) => Math.max(m, arr.length), 0);
   if (maxLen === 0) return [];
 
-  const out: GrassPlacement[][] = [];
-  for (let ti = 0; ti < maxLen; ti++) {
-    const placements: GrassPlacement[] = [];
-    for (const { absX, frames } of timelines) {
-      if (frames.length === 0) continue;
-      const idx = Math.min(ti, frames.length - 1);
-      const m = frames[idx]!;
-      const rows = [...m.keys()].sort((a, b) => a - b);
-      for (const dy of rows) {
-        const ref = m.get(dy)!;
-        placements.push({
-          absX,
-          absY: dy,
-          sourceX: ref.sx,
-          sourceY: ref.sy,
-          level: ref.level,
-        });
+  const out: LevelBoard[] = [];
+  for (let i = 0; i < maxLen; i++) {
+    const snap = createEmptyLevelBoard();
+    for (let y = 0; y < GRID_WEEKDAYS; y++) {
+      for (let x = 0; x < GRID_VISIBLE_WEEKS; x++) {
+        if (x < xStart) {
+          snap[y]![x] = board[y]![x]!;
+        } else if (x > xEndInclusive) {
+          snap[y]![x] = 0;
+        }
       }
     }
-    out.push(placements);
+    let colIdx = 0;
+    for (let x = xStart; x <= xEndInclusive; x++) {
+      const state = colStateAt(colSnaps[colIdx]!, i);
+      colIdx++;
+      for (let y = 0; y < GRID_WEEKDAYS; y++) {
+        snap[y]![x] = state.get(y) ?? 0;
+      }
+    }
+    out.push(snap);
   }
   return out;
 }
 
-function buildGroupFrames(g: GrassColumnGroup): GrassPlacement[][] {
-  const timelines: { absX: number; frames: ColumnFrame[] }[] = [];
-  for (let x = g.xStart; x <= g.xEndInclusive; x++) {
-    const colCells = g.cells.filter((c) => c.x === x);
-    timelines.push({ absX: x, frames: columnTimeline(x, colCells) });
-  }
-  return mergeColumnFrames(timelines);
-}
-
 /**
- * Build strict left-to-right band schedule using the scripted discrete model (see module doc).
- * Prepends one empty frame when any band has motion so the loop starts on an all-empty grid.
+ * Build full 53×7 frame sequence: first frame all empty; then each band left→right.
+ * Inside a band, week columns animate in parallel; shorter columns hold their last state until the longest finishes.
  */
-export function buildScriptedStrictDropSchedule(groups: GrassColumnGroup[]): GrassStrictSchedule {
+export function buildScriptedStrictDropSchedule(board: LevelBoard, groups: GrassColumnGroup[]): GrassStrictSchedule {
   const orderedBands = [...groups].sort((a, b) => a.xStart - b.xStart || a.index - b.index);
-  const allPlacements: GrassPlacement[][] = [];
-  for (const g of orderedBands) {
-    const gf = buildGroupFrames(g);
-    for (const p of gf) {
-      allPlacements.push(p);
-    }
+  const anyGrass = orderedBands.some((g) => g.cells.length > 0);
+  if (!anyGrass) {
+    return {
+      stepDurationMs: STRICT_STEP_MS,
+      holdAfterLastMs: HOLD_AFTER_LAST_MS,
+      frames: [],
+    };
   }
-  const frames: StrictDropFrame[] = allPlacements.map((placements) => ({ placements }));
-  if (frames.length > 0) {
-    frames.unshift({ placements: [] });
+
+  const frames: LevelBoard[] = [createEmptyLevelBoard()];
+  for (const g of orderedBands) {
+    const chunk = buildGroupLevelBoardFrames(g, board);
+    for (const f of chunk) frames.push(f);
   }
   return {
     stepDurationMs: STRICT_STEP_MS,
-    frames,
     holdAfterLastMs: HOLD_AFTER_LAST_MS,
+    frames,
   };
 }
 

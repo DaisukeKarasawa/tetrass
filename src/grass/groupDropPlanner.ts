@@ -56,17 +56,17 @@ export function splitBoardIntoColumnGroups(board: LevelBoard, meta: GrassCellMet
  * Build strict left-to-right band drop using the scripted discrete planner
  * ({@link buildScriptedStrictDropSchedule} in scriptedDropPlanner.ts).
  *
- * When there is at least one animated frame, a leading frame with empty placements is
- * prepended so the cycle starts with the contribution grid fully empty (grey cells only).
+ * When there is at least one animated frame, a leading all-zero {@link LevelBoard} is prepended
+ * so the cycle starts with the contribution grid fully empty (grey cells only).
  */
-export function buildStrictDropSchedule(groups: GrassColumnGroup[]): GrassStrictSchedule {
-  return buildScriptedStrictDropSchedule(groups);
+export function buildStrictDropSchedule(board: LevelBoard, groups: GrassColumnGroup[]): GrassStrictSchedule {
+  return buildScriptedStrictDropSchedule(board, groups);
 }
 
 /**
  * Stable public entry for building the strict drop schedule (CLI, action, tests).
  * Delegates to {@link buildStrictDropSchedule}.
  */
-export function buildDropSchedule(groups: GrassColumnGroup[]): GrassStrictSchedule {
-  return buildStrictDropSchedule(groups);
+export function buildDropSchedule(board: LevelBoard, groups: GrassColumnGroup[]): GrassStrictSchedule {
+  return buildStrictDropSchedule(board, groups);
 }
