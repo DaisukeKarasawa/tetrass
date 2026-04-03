@@ -487,7 +487,7 @@ function buildCellSmil(sx, sy, schedule, frameIndex, cycleMs) {
   const stepMs = schedule.stepDurationMs;
   const fmt = (t) => t.toFixed(6);
   if (F === 0) {
-    return { keyTimes: "0;1", opValues: "0;0", tyValues: "0,0;0,0" };
+    return { keyTimes: "0;1", opValues: "0;0", tyValues: "0 0;0 0" };
   }
   const g = SMIL_KEY_GAP;
   const rTail = Math.max(0, 1 - CYCLE_TAIL_RESET);
@@ -504,15 +504,16 @@ function buildCellSmil(sx, sy, schedule, frameIndex, cycleMs) {
   for (let k = 0; k < n; k++) {
     let frameIdx;
     if (k <= F - 1) frameIdx = k;
+    else if (k === n - 2) frameIdx = 0;
     else if (k === n - 1) frameIdx = 0;
     else frameIdx = F - 1;
     const st = placementForFrame(sx, sy, frameIdx, frameIndex);
     if (!st || !st.visible) {
       opVals.push("0");
-      tyVals.push("0,0");
+      tyVals.push("0 0");
     } else {
       opVals.push("1");
-      tyVals.push(`0,${(st.absY - sy) * STEP}`);
+      tyVals.push(`0 ${(st.absY - sy) * STEP}`);
     }
   }
   return {

@@ -38,7 +38,7 @@ describe("buildGrassDropSvg", () => {
     expect(translateValues.length).toBeGreaterThan(0);
     for (const vals of translateValues) {
       for (const pair of vals.split(";")) {
-        expect(pair).toMatch(/^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?$/);
+        expect(pair).toMatch(/^-?\d+(?:\.\d+)?\s-?\d+(?:\.\d+)?$/);
       }
     }
   });
