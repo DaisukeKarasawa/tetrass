@@ -1,8 +1,12 @@
 # AGENTS.md
 
+## Premise (non-negotiable)
+
+**The contribution heatmap must match the grass graph GitHub shows on the profile Overview** for the same user and time window: same **53×7** visible grid, same **week column / weekday** placement, and same **`contributionLevel` → intensity `0..4`** per cell. Tetrass only adds a scripted drop **animation** on top of that board; it must not invent, omit, or remap cells relative to Overview.
+
 ## Repository purpose
 
-This repository generates **deterministic animated SVGs** of a GitHub-style contribution graph from GitHub contribution data, and publishes them as:
+This repository generates **deterministic animated SVGs** of that Overview-equivalent contribution graph from GitHub contribution data, and publishes them as:
 
 - a CLI flow (`src/main.ts` -> `src/generateRunner.ts`)
 - a composite GitHub Action (`action/action.yml` + generated `action/index.mjs`)

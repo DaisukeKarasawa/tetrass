@@ -1,7 +1,8 @@
 # Tetrass
 
-Deterministic (no randomness) **animated GitHub contribution graph** (“grass”) as SVG for your profile README.  
-The UI matches the normal profile heatmap: **53×7** cells, one square per day, with **four green intensity levels** from GitHub’s `contributionLevel`.
+Deterministic (no randomness) **animated GitHub contribution graph** (“grass”) as SVG for your profile README.
+
+**Premise:** the static heatmap is the same as on your GitHub profile **Overview** — **53×7** visible cells, one square per day, **`contributionLevel` → four green intensities** (`0..4`) in the same positions. Animation is layered on that board only; it does not change which days are empty vs coloured or their levels.
 
 Animation: the year is split into **nine vertical bands** — eight **`6×7`** blocks and one **`5×7`** block (left → right). Each band **drops from above** with internal day positions fixed; bands run **sequentially** so earlier weeks land before later ones. The discrete timeline is built by [`src/grass/scriptedDropPlanner.ts`](src/grass/scriptedDropPlanner.ts) (per-week-column falls merged in lockstep within each band). See [`AGENTS.md`](AGENTS.md) for board vs band-local coordinates (`row 1` = Sunday).
 
@@ -66,11 +67,13 @@ Use your default branch name in place of `main` if it differs.
 
 ## How it works
 
-1. Fetches the contribution calendar from the GitHub GraphQL API (`contributionCount` + **`contributionLevel`**). The composite action uses `GITHUB_TOKEN` (`github.token`) and fails fast if it is missing unless you enable sample/offline mode. Locally, provide `GITHUB_TOKEN` for real data, set `TETRASS_USE_SAMPLE=1` (or `TETRASS_OFFLINE=1`) for offline sample data, or set `TETRASS_ALLOW_UNAUTH_FALLBACK=1` (CLI only) to allow a sample fallback when an unauthenticated fetch fails.
-2. Maps contributions to a GitHub-native weekly grid: **x = week index, y = weekday**, **53 visible weeks** (right-aligned when history is shorter).
-3. Splits columns into **nine bands** `6+6+6+6+6+6+6+6+5` and builds a **fixed timeline** of SMIL animations (no Tetris / line-clear simulation).
-4. Renders an SVG with **light** or **dark** palettes aligned to GitHub-style greens.
+1. Fetches the contribution calendar from the GitHub GraphQL API (`contributionCount` + **`contributionLevel`**) — the same fields Overview uses. The composite action uses `GITHUB_TOKEN` (`github.token`) and fails fast if it is missing unless you enable sample/offline mode. Locally, provide `GITHUB_TOKEN` for real data, set `TETRASS_USE_SAMPLE=1` (or `TETRASS_OFFLINE=1`) for offline sample data, or set `TETRASS_ALLOW_UNAUTH_FALLBACK=1` (CLI only) to allow a sample fallback when an unauthenticated fetch fails.
+2. Maps contributions to a GitHub-native weekly grid: **x = week index, y = weekday**, **53 visible weeks** (right-aligned when history is shorter), so the level board matches Overview placement.
+3. Splits columns into **nine bands** `6+6+6+6+6+6+6+6+5` and builds a **fixed timeline** of discrete SMIL steps (no Tetris / line-clear simulation).
+4. Renders **static SVG files** (not Canvas): each cell is a rounded rect; **light** and **dark** are **separate outputs** (use a `<picture>` / `prefers-color-scheme` embed as in this README), not a single file with `@media (prefers-color-scheme: dark)` inside the SVG.
 5. Writes the SVG files you listed under `outputs`.
+
+Compared to projects like [Platane/snk](https://github.com/Platane/snk) (Canvas demo + CSS-variable SVG + snake path), Tetrass focuses on **Overview-faithful levels and grid** and a **nine-band drop** animation only.
 
 ## Local generation (this repo / development)
 
@@ -100,7 +103,7 @@ Sample/offline mode uses a deterministic calendar with varied `contributionLevel
 
 ### Tests
 
-`npm test` covers mapping, nine-band splitting, palette sanitization, and a small integration check that the SVG contains one grass `<use>` per non-zero cell in the sample board.
+`npm test` covers mapping, nine-band splitting, palette sanitization, SMIL `fill` timelines, and a small integration check that the sample pipeline writes an SVG with the expected grid rect count and contribution colours.
 
 CLI-only: if you intentionally run without `GITHUB_TOKEN` and want a deterministic sample when the public GraphQL request fails, set `TETRASS_ALLOW_UNAUTH_FALLBACK=1` (not recommended for workflows that should reflect real contributions).
 
