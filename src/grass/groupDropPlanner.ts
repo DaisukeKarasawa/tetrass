@@ -160,7 +160,10 @@ export function buildStrictDropSchedule(groups: GrassColumnGroup[]): GrassStrict
   };
 }
 
-/** @deprecated Use {@link buildStrictDropSchedule}; kept as stable name for callers. */
+/**
+ * Stable public entry for building the strict drop schedule (CLI, action, tests).
+ * Delegates to {@link buildStrictDropSchedule}; prefer this name for external callers.
+ */
 export function buildDropSchedule(groups: GrassColumnGroup[]): GrassStrictSchedule {
   return buildStrictDropSchedule(groups);
 }
