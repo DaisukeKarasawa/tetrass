@@ -3,7 +3,7 @@
 Deterministic (no randomness) **animated GitHub contribution graph** (“grass”) as SVG for your profile README.  
 The UI matches the normal profile heatmap: **53×7** cells, one square per day, with **four green intensity levels** from GitHub’s `contributionLevel`.
 
-Animation: the year is split into **nine vertical bands** — eight **`6×7`** blocks and one **`5×7`** block (left → right). Each band **drops from above** with internal day positions fixed; bands run **sequentially** so earlier weeks land before later ones.
+Animation: the year is split into **nine vertical bands** — eight **`6×7`** blocks and one **`5×7`** block (left → right). Each band **drops from above** with internal day positions fixed; bands run **sequentially** so earlier weeks land before later ones. The discrete timeline is built by [`src/grass/scriptedDropPlanner.ts`](src/grass/scriptedDropPlanner.ts) (per-week-column falls merged in lockstep within each band). See [`AGENTS.md`](AGENTS.md) for board vs band-local coordinates (`row 1` = Sunday).
 
 ## Use from your profile repository (recommended, snk-style)
 

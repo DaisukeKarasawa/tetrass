@@ -205,7 +205,7 @@ function buildSampleContributionDays() {
   return days;
 }
 
-// src/grass/groupDropPlanner.ts
+// src/grass/scriptedDropPlanner.ts
 var STRICT_STEP_MS = 80;
 var HOLD_AFTER_LAST_MS = 1800;
 function columnTimeline(absX, cellsInCol) {
@@ -275,6 +275,32 @@ function buildGroupFrames(g) {
   }
   return mergeColumnFrames(timelines);
 }
+function buildScriptedStrictDropSchedule(groups) {
+  const orderedBands = [...groups].sort((a, b) => a.xStart - b.xStart || a.index - b.index);
+  const allPlacements = [];
+  for (const g of orderedBands) {
+    const gf = buildGroupFrames(g);
+    for (const p of gf) {
+      allPlacements.push(p);
+    }
+  }
+  const frames = allPlacements.map((placements) => ({ placements }));
+  if (frames.length > 0) {
+    frames.unshift({ placements: [] });
+  }
+  return {
+    stepDurationMs: STRICT_STEP_MS,
+    frames,
+    holdAfterLastMs: HOLD_AFTER_LAST_MS
+  };
+}
+function totalCycleMs(schedule) {
+  const { frames, stepDurationMs, holdAfterLastMs } = schedule;
+  if (frames.length === 0) return holdAfterLastMs;
+  return frames.length * stepDurationMs + holdAfterLastMs;
+}
+
+// src/grass/groupDropPlanner.ts
 function splitBoardIntoColumnGroups(board, meta) {
   const ranges = groupColumnRanges();
   if (board.length !== GRID_WEEKDAYS) {
@@ -315,31 +341,10 @@ function splitBoardIntoColumnGroups(board, meta) {
   return groups;
 }
 function buildStrictDropSchedule(groups) {
-  const orderedBands = [...groups].sort((a, b) => a.xStart - b.xStart || a.index - b.index);
-  const allPlacements = [];
-  for (const g of orderedBands) {
-    const gf = buildGroupFrames(g);
-    for (const p of gf) {
-      allPlacements.push(p);
-    }
-  }
-  const frames = allPlacements.map((placements) => ({ placements }));
-  if (frames.length > 0) {
-    frames.unshift({ placements: [] });
-  }
-  return {
-    stepDurationMs: STRICT_STEP_MS,
-    frames,
-    holdAfterLastMs: HOLD_AFTER_LAST_MS
-  };
+  return buildScriptedStrictDropSchedule(groups);
 }
 function buildDropSchedule(groups) {
   return buildStrictDropSchedule(groups);
-}
-function totalCycleMs(schedule) {
-  const { frames, stepDurationMs, holdAfterLastMs } = schedule;
-  if (frames.length === 0) return holdAfterLastMs;
-  return frames.length * stepDurationMs + holdAfterLastMs;
 }
 
 // src/renderer/svgRenderer.ts

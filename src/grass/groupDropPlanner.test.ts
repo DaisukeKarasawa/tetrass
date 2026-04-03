@@ -10,6 +10,7 @@ import {
   totalCycleMs,
 } from "./groupDropPlanner.js";
 import { contributionDaysToLevelBoard, type ContributionDay } from "../io/contributions.js";
+import { expectedBand1FourGrassStrictFrames, normalizePlacements } from "./scriptedDropGolden.js";
 import { expectedGroup0TwoCellColumnFrames, normalizeGolden } from "./strictDropFixture.js";
 
 describe("groupColumnRanges", () => {
@@ -93,6 +94,30 @@ describe("buildStrictDropSchedule / golden group0", () => {
         })),
       );
       expect(got).toEqual(normalizeGolden(expected[i]!));
+    }
+  });
+});
+
+describe("scripted drop / band 1 four-grass golden", () => {
+  it("matches golden frames for grass at (9,4),(10,4),(11,1),(11,2) only", () => {
+    const board = createEmptyLevelBoard();
+    board[4]![9] = 1;
+    board[4]![10] = 1;
+    board[1]![11] = 1;
+    board[2]![11] = 1;
+    const meta = board.map((row, y) =>
+      row.map((_, x) => ({
+        date: `d-${y}-${x}`,
+        contributionCount: board[y]![x]! > 0 ? 1 : 0,
+      })),
+    );
+    const schedule = buildStrictDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const expected = expectedBand1FourGrassStrictFrames();
+    expect(schedule.frames).toHaveLength(expected.length);
+    for (let i = 0; i < expected.length; i++) {
+      expect(normalizePlacements(schedule.frames[i]!.placements)).toEqual(
+        normalizePlacements(expected[i]!.placements),
+      );
     }
   });
 });
