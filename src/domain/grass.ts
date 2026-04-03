@@ -41,16 +41,28 @@ export interface GrassColumnGroup {
   cells: GrassCell[];
 }
 
-/** Deterministic schedule entry for SMIL: one animated `<g>` per group. */
-export interface GroupDropSegment {
-  groupIndex: GroupIndex;
-  /** When this group's fall starts (ms from cycle start). */
-  startMs: number;
-  /** Fall animation duration (ms). */
-  dropDurationMs: number;
-  /** Initial translateY magnitude in cell pitches (multiplied by cell size in renderer). */
-  fallOffsetCells: number;
-  cells: GrassCell[];
+/** One visible grass tile: drawn at (absX, absY) using color/level from source (sourceX, sourceY). */
+export interface GrassPlacement {
+  absX: number;
+  absY: number;
+  sourceX: number;
+  sourceY: number;
+  level: GrassDropLevel;
+}
+
+/** One timestep of the strict drop animation (global, all groups concatenated). */
+export interface StrictDropFrame {
+  placements: GrassPlacement[];
+}
+
+/**
+ * Full SMIL timeline: discrete frames of equal duration, then hold, then loop.
+ * Built from nine column groups processed left → right.
+ */
+export interface GrassStrictSchedule {
+  stepDurationMs: number;
+  frames: StrictDropFrame[];
+  holdAfterLastMs: number;
 }
 
 export function assertGroupColumnCounts(): void {
