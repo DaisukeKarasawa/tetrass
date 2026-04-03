@@ -8,7 +8,6 @@ import {
   PALETTE_DARK,
   PALETTE_LIGHT,
   sanitizeGrassPalette,
-  smilDropKeyTimesForTest,
   validateColor,
 } from "./svgRenderer.js";
 
@@ -101,10 +100,14 @@ describe("buildGrassDropSvg", () => {
     expect(svg).not.toMatch(/keyTimes="0;0\.0+/);
   });
 
-  it("keeps smil keyTimes strictly increasing after toFixed(6) when raw b nears 1 or exceeds rTail", () => {
-    expectStrictIncreasingKeyTimes(smilDropKeyTimesForTest(0, 420, 420));
-    expectStrictIncreasingKeyTimes(smilDropKeyTimesForTest(0, 420, 421));
-    expectStrictIncreasingKeyTimes(smilDropKeyTimesForTest(40, 60, 100));
-    expectStrictIncreasingKeyTimes(smilDropKeyTimesForTest(1, 499, 500));
+  it("keeps smil keyTimes strictly increasing in rendered SVG output", () => {
+    const { board, meta } = contributionDaysToLevelBoard(buildSampleContributionDays());
+    const segments = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const svg = buildGrassDropSvg(segments, PALETTE_DARK);
+    const allKeyTimes = [...svg.matchAll(/keyTimes="([^"]*)"/g)].map((m) => m[1]!);
+    expect(allKeyTimes.length).toBeGreaterThan(0);
+    for (const kt of allKeyTimes) {
+      expectStrictIncreasingKeyTimes(kt);
+    }
   });
 });

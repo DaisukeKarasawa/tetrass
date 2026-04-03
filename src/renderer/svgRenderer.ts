@@ -1,4 +1,4 @@
-import type { GrassDropLevel, GrassStrictSchedule } from "../domain/grass.js";
+import type { GrassDropLevel, GrassPlacement, GrassStrictSchedule } from "../domain/grass.js";
 import { GRID_VISIBLE_WEEKS, GRID_WEEKDAYS } from "../domain/grass.js";
 import { totalCycleMs } from "../grass/groupDropPlanner.js";
 
@@ -174,14 +174,27 @@ function levelHref(level: GrassDropLevel): string {
   return `cG${level}`;
 }
 
+/** Pre-indexed frame placements: frameIndex → "sx,sy" → placement. */
+type FramePlacementIndex = Map<string, GrassPlacement>[];
+
+function buildFrameIndex(schedule: GrassStrictSchedule): FramePlacementIndex {
+  return schedule.frames.map((fr) => {
+    const m = new Map<string, GrassPlacement>();
+    for (const p of fr.placements) {
+      m.set(`${p.sourceX},${p.sourceY}`, p);
+    }
+    return m;
+  });
+}
+
 function placementForFrame(
   sx: number,
   sy: number,
   frameIndex: number,
-  schedule: GrassStrictSchedule,
+  index: FramePlacementIndex,
 ): { absY: number; visible: boolean } | null {
-  if (frameIndex < 0 || frameIndex >= schedule.frames.length) return null;
-  const p = schedule.frames[frameIndex]!.placements.find((x) => x.sourceX === sx && x.sourceY === sy);
+  if (frameIndex < 0 || frameIndex >= index.length) return null;
+  const p = index[frameIndex]!.get(`${sx},${sy}`);
   if (!p) return { absY: sy, visible: false };
   return { absY: p.absY, visible: true };
 }
@@ -189,8 +202,8 @@ function placementForFrame(
 function buildCellSmil(
   sx: number,
   sy: number,
-  level: GrassDropLevel,
   schedule: GrassStrictSchedule,
+  frameIndex: FramePlacementIndex,
   cycleMs: number,
 ): { keyTimes: string; opValues: string; tyValues: string } {
   const F = schedule.frames.length;
@@ -220,7 +233,7 @@ function buildCellSmil(
     else if (k === n - 1) frameIdx = 0;
     else frameIdx = F - 1;
 
-    const st = placementForFrame(sx, sy, frameIdx, schedule);
+    const st = placementForFrame(sx, sy, frameIdx, frameIndex);
     if (!st || !st.visible) {
       opVals.push("0");
       tyVals.push("0,0");
@@ -263,9 +276,10 @@ function renderAnimatedGrassCell(
   sy: number,
   level: GrassDropLevel,
   schedule: GrassStrictSchedule,
+  frameIndex: FramePlacementIndex,
   cycleMs: number,
 ): string {
-  const { keyTimes, opValues, tyValues } = buildCellSmil(sx, sy, level, schedule, cycleMs);
+  const { keyTimes, opValues, tyValues } = buildCellSmil(sx, sy, schedule, frameIndex, cycleMs);
   const href = levelHref(level);
   return `<g>
 <animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes}" values="${opValues}"/>
@@ -285,6 +299,7 @@ export function buildGrassDropSvg(schedule: GrassStrictSchedule, palette: GrassP
   const boardW = GRID_VISIBLE_WEEKS * STEP + PAD * 2;
   const boardH = GRID_WEEKDAYS * STEP + PAD * 2;
 
+  const fIdx = buildFrameIndex(schedule);
   const sources = collectSourceCells(schedule);
   const drops = [...sources.entries()]
     .sort((a, b) => {
@@ -295,7 +310,7 @@ export function buildGrassDropSvg(schedule: GrassStrictSchedule, palette: GrassP
     })
     .map(([key, lvl]) => {
       const [sx, sy] = key.split(",").map(Number) as [number, number];
-      return renderAnimatedGrassCell(sx, sy, lvl, schedule, cycleMs);
+      return renderAnimatedGrassCell(sx, sy, lvl, schedule, fIdx, cycleMs);
     })
     .join("\n");
 
@@ -312,9 +327,4 @@ ${renderEmptyGrid()}
 ${drops}
 </g>
 </svg>`;
-}
-
-/** @deprecated Legacy helper; strict timeline uses variable-length keyTimes. */
-export function smilDropKeyTimesForTest(_startMs: number, _dropDurationMs: number, _cycleMs: number): string {
-  return "0;0.5;0.999999;1";
 }

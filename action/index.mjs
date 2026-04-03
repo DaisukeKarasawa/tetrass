@@ -467,13 +467,22 @@ ${sym("cG4", l4)}
 function levelHref(level) {
   return `cG${level}`;
 }
-function placementForFrame(sx, sy, frameIndex, schedule) {
-  if (frameIndex < 0 || frameIndex >= schedule.frames.length) return null;
-  const p = schedule.frames[frameIndex].placements.find((x) => x.sourceX === sx && x.sourceY === sy);
+function buildFrameIndex(schedule) {
+  return schedule.frames.map((fr) => {
+    const m = /* @__PURE__ */ new Map();
+    for (const p of fr.placements) {
+      m.set(`${p.sourceX},${p.sourceY}`, p);
+    }
+    return m;
+  });
+}
+function placementForFrame(sx, sy, frameIndex, index) {
+  if (frameIndex < 0 || frameIndex >= index.length) return null;
+  const p = index[frameIndex].get(`${sx},${sy}`);
   if (!p) return { absY: sy, visible: false };
   return { absY: p.absY, visible: true };
 }
-function buildCellSmil(sx, sy, level, schedule, cycleMs) {
+function buildCellSmil(sx, sy, schedule, frameIndex, cycleMs) {
   const F = schedule.frames.length;
   const stepMs = schedule.stepDurationMs;
   const fmt = (t) => t.toFixed(6);
@@ -497,7 +506,7 @@ function buildCellSmil(sx, sy, level, schedule, cycleMs) {
     if (k <= F - 1) frameIdx = k;
     else if (k === n - 1) frameIdx = 0;
     else frameIdx = F - 1;
-    const st = placementForFrame(sx, sy, frameIdx, schedule);
+    const st = placementForFrame(sx, sy, frameIdx, frameIndex);
     if (!st || !st.visible) {
       opVals.push("0");
       tyVals.push("0,0");
@@ -531,8 +540,8 @@ function renderEmptyGrid() {
   }
   return s;
 }
-function renderAnimatedGrassCell(sx, sy, level, schedule, cycleMs) {
-  const { keyTimes, opValues, tyValues } = buildCellSmil(sx, sy, level, schedule, cycleMs);
+function renderAnimatedGrassCell(sx, sy, level, schedule, frameIndex, cycleMs) {
+  const { keyTimes, opValues, tyValues } = buildCellSmil(sx, sy, schedule, frameIndex, cycleMs);
   const href = levelHref(level);
   return `<g>
 <animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes}" values="${opValues}"/>
@@ -547,6 +556,7 @@ function buildGrassDropSvg(schedule, palette) {
   const cycleMs = totalCycleMs(schedule);
   const boardW = GRID_VISIBLE_WEEKS * STEP + PAD * 2;
   const boardH = GRID_WEEKDAYS * STEP + PAD * 2;
+  const fIdx = buildFrameIndex(schedule);
   const sources = collectSourceCells(schedule);
   const drops = [...sources.entries()].sort((a, b) => {
     const [ax, ay] = a[0].split(",").map(Number);
@@ -555,7 +565,7 @@ function buildGrassDropSvg(schedule, palette) {
     return ay - by;
   }).map(([key, lvl]) => {
     const [sx, sy] = key.split(",").map(Number);
-    return renderAnimatedGrassCell(sx, sy, lvl, schedule, cycleMs);
+    return renderAnimatedGrassCell(sx, sy, lvl, schedule, fIdx, cycleMs);
   }).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${boardW}" height="${boardH}" viewBox="0 0 ${boardW} ${boardH}" role="img" aria-label="Contribution graph animation">

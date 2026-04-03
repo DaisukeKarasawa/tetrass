@@ -74,24 +74,27 @@ describe("Determinism: API contributionLevel → board → SVG symbols", () => {
   });
 });
 
+/** Shared fixture: one level-1 cell per band at (xStart, 0). */
+function createOneCellPerBandFixture() {
+  const ranges = groupColumnRanges();
+  const board = createEmptyLevelBoard();
+  const meta = board.map((row, y) =>
+    row.map((_, x) => ({
+      date: `d-${y}-${x}`,
+      contributionCount: board[y]![x]! > 0 ? 1 : 0,
+    })),
+  );
+  for (let gi = 0; gi < 9; gi++) {
+    const x = ranges[gi]!.xStart;
+    board[0]![x] = 1 as GrassLevel;
+    meta[0]![x] = { date: `seed-${gi}`, contributionCount: 1 };
+  }
+  return { ranges, board, meta };
+}
+
 describe("Determinism: nine-band schedule & strict discrete model", () => {
   it("places one grass per band on column xStart at weekday row 0 (partition invariant)", () => {
-    const ranges = groupColumnRanges();
-    const board = createEmptyLevelBoard();
-    const meta = board.map((row, y) =>
-      row.map((_, x) => ({
-        date: `d-${y}-${x}`,
-        contributionCount: board[y]![x]! > 0 ? 1 : 0,
-      })),
-    );
-
-    for (let gi = 0; gi < 9; gi++) {
-      const x = ranges[gi]!.xStart;
-      const y = 0;
-      board[y]![x] = 1 as GrassLevel;
-      meta[y]![x] = { date: `seed-${gi}`, contributionCount: 1 };
-    }
-
+    const { ranges, board, meta } = createOneCellPerBandFixture();
     const groups = splitBoardIntoColumnGroups(board, meta);
     expect(groups).toHaveLength(9);
     for (let gi = 0; gi < 9; gi++) {
@@ -104,42 +107,14 @@ describe("Determinism: nine-band schedule & strict discrete model", () => {
   });
 
   it("produces identical GrassStrictSchedule when rebuilt from the same board (stable discrete merge)", () => {
-    const ranges = groupColumnRanges();
-    const board = createEmptyLevelBoard();
-    const meta = board.map((row, y) =>
-      row.map((_, x) => ({
-        date: `d-${y}-${x}`,
-        contributionCount: board[y]![x]! > 0 ? 1 : 0,
-      })),
-    );
-    for (let gi = 0; gi < 9; gi++) {
-      const x = ranges[gi]!.xStart;
-      const y = 0;
-      board[y]![x] = 1 as GrassLevel;
-      meta[y]![x] = { date: `seed-${gi}`, contributionCount: 1 };
-    }
-
+    const { board, meta } = createOneCellPerBandFixture();
     const g1 = splitBoardIntoColumnGroups(board, meta);
     const g2 = splitBoardIntoColumnGroups(board, meta);
     expect(buildStrictDropSchedule(g1)).toEqual(buildStrictDropSchedule(g2));
   });
 
   it("keeps a golden frame count for the 9-band one-cell-per-band fixture (regression guard)", () => {
-    const ranges = groupColumnRanges();
-    const board = createEmptyLevelBoard();
-    const meta = board.map((row, y) =>
-      row.map((_, x) => ({
-        date: `d-${y}-${x}`,
-        contributionCount: board[y]![x]! > 0 ? 1 : 0,
-      })),
-    );
-    for (let gi = 0; gi < 9; gi++) {
-      const x = ranges[gi]!.xStart;
-      const y = 0;
-      board[y]![x] = 1 as GrassLevel;
-      meta[y]![x] = { date: `seed-${gi}`, contributionCount: 1 };
-    }
-
+    const { board, meta } = createOneCellPerBandFixture();
     const schedule = buildStrictDropSchedule(splitBoardIntoColumnGroups(board, meta));
     /** One discrete frame per group (single y=0 cell at each band's xStart). */
     expect(schedule.frames).toHaveLength(9);
