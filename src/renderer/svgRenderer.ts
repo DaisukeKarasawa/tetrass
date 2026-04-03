@@ -198,7 +198,7 @@ function buildCellSmil(
   const fmt = (t: number): string => t.toFixed(6);
 
   if (F === 0) {
-    return { keyTimes: "0;1", opValues: "0;0", tyValues: "0;0" };
+    return { keyTimes: "0;1", opValues: "0;0", tyValues: "0,0;0,0" };
   }
 
   const g = SMIL_KEY_GAP;
@@ -223,10 +223,10 @@ function buildCellSmil(
     const st = placementForFrame(sx, sy, frameIdx, schedule);
     if (!st || !st.visible) {
       opVals.push("0");
-      tyVals.push("0");
+      tyVals.push("0,0");
     } else {
       opVals.push("1");
-      tyVals.push(String((st.absY - sy) * STEP));
+      tyVals.push(`0,${(st.absY - sy) * STEP}`);
     }
   }
 
