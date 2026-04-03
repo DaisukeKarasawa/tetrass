@@ -2,7 +2,10 @@ import {
   type GrassCell,
   type GrassCellMeta,
   type GrassColumnGroup,
-  type GroupDropSegment,
+  type GrassDropLevel,
+  type GrassPlacement,
+  type GrassStrictSchedule,
+  type StrictDropFrame,
   type GroupIndex,
   type LevelBoard,
   GRID_VISIBLE_WEEKS,
@@ -10,11 +13,91 @@ import {
   groupColumnRanges,
 } from "../domain/grass.js";
 
-/** Sequential drops: each group starts when the previous lands. */
-export const DROP_DURATION_MS = 420;
+/** Duration of each discrete frame in the strict drop timeline. */
+export const STRICT_STEP_MS = 80;
+/** Hold the completed board before looping. */
 export const HOLD_AFTER_LAST_MS = 1800;
-/** Pixels above the board where falling groups start (multiple of cell pitch is nice visually). */
-export const FALL_OFFSET_CELLS = 14;
+
+type CellRef = { sx: number; sy: number; level: GrassDropLevel };
+
+/** One column's timeline: each entry is displayRow -> source ref for that frame. */
+type ColumnFrame = Map<number, CellRef>;
+
+function columnTimeline(absX: number, cellsInCol: GrassCell[]): ColumnFrame[] {
+  if (cellsInCol.length === 0) return [];
+  const ys = [...new Set(cellsInCol.map((c) => c.y))].sort((a, b) => a - b);
+  const missions = [...ys].reverse();
+  const settled = new Set<number>();
+  const frames: ColumnFrame[] = [];
+
+  const cellAtY = (y: number): GrassCell => cellsInCol.find((c) => c.y === y)!;
+
+  const settledMap = (): ColumnFrame => {
+    const m = new Map<number, CellRef>();
+    for (const y of [...settled].sort((a, b) => a - b)) {
+      const c = cellAtY(y);
+      m.set(y, { sx: absX, sy: y, level: c.level });
+    }
+    return m;
+  };
+
+  for (let mi = 0; mi < missions.length; mi++) {
+    const y_t = missions[mi]!;
+    const c = cellAtY(y_t);
+    for (let d = 0; d < y_t; d++) {
+      const pl = settledMap();
+      pl.set(d, { sx: absX, sy: y_t, level: c.level });
+      frames.push(pl);
+    }
+    settled.add(y_t);
+    const nextY = missions[mi + 1];
+    // If the next mission is row 0, it adds no fall frames — omit a lone "settled only"
+    // frame so the final state includes both cells in one frame (matches golden / UX).
+    if (nextY === undefined) {
+      frames.push(settledMap());
+    } else if (nextY > 0) {
+      frames.push(settledMap());
+    }
+  }
+  return frames;
+}
+
+function mergeColumnFrames(timelines: { absX: number; frames: ColumnFrame[] }[]): GrassPlacement[][] {
+  const maxLen = timelines.reduce((m, t) => Math.max(m, t.frames.length), 0);
+  if (maxLen === 0) return [];
+
+  const out: GrassPlacement[][] = [];
+  for (let ti = 0; ti < maxLen; ti++) {
+    const placements: GrassPlacement[] = [];
+    for (const { absX, frames } of timelines) {
+      if (frames.length === 0) continue;
+      const idx = Math.min(ti, frames.length - 1);
+      const m = frames[idx]!;
+      const rows = [...m.keys()].sort((a, b) => a - b);
+      for (const dy of rows) {
+        const ref = m.get(dy)!;
+        placements.push({
+          absX,
+          absY: dy,
+          sourceX: ref.sx,
+          sourceY: ref.sy,
+          level: ref.level,
+        });
+      }
+    }
+    out.push(placements);
+  }
+  return out;
+}
+
+function buildGroupFrames(g: GrassColumnGroup): GrassPlacement[][] {
+  const timelines: { absX: number; frames: ColumnFrame[] }[] = [];
+  for (let x = g.xStart; x <= g.xEndInclusive; x++) {
+    const colCells = g.cells.filter((c) => c.x === x);
+    timelines.push({ absX: x, frames: columnTimeline(x, colCells) });
+  }
+  return mergeColumnFrames(timelines);
+}
 
 export function splitBoardIntoColumnGroups(board: LevelBoard, meta: GrassCellMeta[][]): GrassColumnGroup[] {
   const ranges = groupColumnRanges();
@@ -57,25 +140,41 @@ export function splitBoardIntoColumnGroups(board: LevelBoard, meta: GrassCellMet
   return groups;
 }
 
-/** Build meta grid aligned with board (same shape); empty cells can use placeholder meta. */
-export function buildDropSchedule(groups: GrassColumnGroup[]): GroupDropSegment[] {
-  let t = 0;
-  const segments: GroupDropSegment[] = [];
-  for (const g of groups) {
-    segments.push({
-      groupIndex: g.index,
-      startMs: t,
-      dropDurationMs: DROP_DURATION_MS,
-      fallOffsetCells: FALL_OFFSET_CELLS,
-      cells: g.cells,
-    });
-    t += DROP_DURATION_MS;
+/**
+ * Build strict left-to-right group drop: within each group, columns run in parallel;
+ * each column drops bottom grass first, then upper, with discrete row steps.
+ *
+ * Groups are processed in ascending {@link GrassColumnGroup.xStart} so schedule order
+ * stays left-to-right even if the caller passes a shuffled array (e.g. not from
+ * {@link splitBoardIntoColumnGroups}).
+ */
+export function buildStrictDropSchedule(groups: GrassColumnGroup[]): GrassStrictSchedule {
+  const orderedBands = [...groups].sort((a, b) => a.xStart - b.xStart || a.index - b.index);
+  const allPlacements: GrassPlacement[][] = [];
+  for (const g of orderedBands) {
+    const gf = buildGroupFrames(g);
+    for (const p of gf) {
+      allPlacements.push(p);
+    }
   }
-  return segments;
+  const frames: StrictDropFrame[] = allPlacements.map((placements) => ({ placements }));
+  return {
+    stepDurationMs: STRICT_STEP_MS,
+    frames,
+    holdAfterLastMs: HOLD_AFTER_LAST_MS,
+  };
 }
 
-export function totalCycleMs(segments: GroupDropSegment[]): number {
-  if (segments.length === 0) return HOLD_AFTER_LAST_MS;
-  const last = segments[segments.length - 1]!;
-  return last.startMs + last.dropDurationMs + HOLD_AFTER_LAST_MS;
+/**
+ * Stable public entry for building the strict drop schedule (CLI, action, tests).
+ * Delegates to {@link buildStrictDropSchedule}; prefer this name for external callers.
+ */
+export function buildDropSchedule(groups: GrassColumnGroup[]): GrassStrictSchedule {
+  return buildStrictDropSchedule(groups);
+}
+
+export function totalCycleMs(schedule: GrassStrictSchedule): number {
+  const { frames, stepDurationMs, holdAfterLastMs } = schedule;
+  if (frames.length === 0) return holdAfterLastMs;
+  return frames.length * stepDurationMs + holdAfterLastMs;
 }

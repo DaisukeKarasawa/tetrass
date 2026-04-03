@@ -206,9 +206,75 @@ function buildSampleContributionDays() {
 }
 
 // src/grass/groupDropPlanner.ts
-var DROP_DURATION_MS = 420;
+var STRICT_STEP_MS = 80;
 var HOLD_AFTER_LAST_MS = 1800;
-var FALL_OFFSET_CELLS = 14;
+function columnTimeline(absX, cellsInCol) {
+  if (cellsInCol.length === 0) return [];
+  const ys = [...new Set(cellsInCol.map((c) => c.y))].sort((a, b) => a - b);
+  const missions = [...ys].reverse();
+  const settled = /* @__PURE__ */ new Set();
+  const frames = [];
+  const cellAtY = (y) => cellsInCol.find((c) => c.y === y);
+  const settledMap = () => {
+    const m = /* @__PURE__ */ new Map();
+    for (const y of [...settled].sort((a, b) => a - b)) {
+      const c = cellAtY(y);
+      m.set(y, { sx: absX, sy: y, level: c.level });
+    }
+    return m;
+  };
+  for (let mi = 0; mi < missions.length; mi++) {
+    const y_t = missions[mi];
+    const c = cellAtY(y_t);
+    for (let d = 0; d < y_t; d++) {
+      const pl = settledMap();
+      pl.set(d, { sx: absX, sy: y_t, level: c.level });
+      frames.push(pl);
+    }
+    settled.add(y_t);
+    const nextY = missions[mi + 1];
+    if (nextY === void 0) {
+      frames.push(settledMap());
+    } else if (nextY > 0) {
+      frames.push(settledMap());
+    }
+  }
+  return frames;
+}
+function mergeColumnFrames(timelines) {
+  const maxLen = timelines.reduce((m, t) => Math.max(m, t.frames.length), 0);
+  if (maxLen === 0) return [];
+  const out = [];
+  for (let ti = 0; ti < maxLen; ti++) {
+    const placements = [];
+    for (const { absX, frames } of timelines) {
+      if (frames.length === 0) continue;
+      const idx = Math.min(ti, frames.length - 1);
+      const m = frames[idx];
+      const rows = [...m.keys()].sort((a, b) => a - b);
+      for (const dy of rows) {
+        const ref = m.get(dy);
+        placements.push({
+          absX,
+          absY: dy,
+          sourceX: ref.sx,
+          sourceY: ref.sy,
+          level: ref.level
+        });
+      }
+    }
+    out.push(placements);
+  }
+  return out;
+}
+function buildGroupFrames(g) {
+  const timelines = [];
+  for (let x = g.xStart; x <= g.xEndInclusive; x++) {
+    const colCells = g.cells.filter((c) => c.x === x);
+    timelines.push({ absX: x, frames: columnTimeline(x, colCells) });
+  }
+  return mergeColumnFrames(timelines);
+}
 function splitBoardIntoColumnGroups(board, meta) {
   const ranges = groupColumnRanges();
   if (board.length !== GRID_WEEKDAYS) {
@@ -248,25 +314,29 @@ function splitBoardIntoColumnGroups(board, meta) {
   }
   return groups;
 }
-function buildDropSchedule(groups) {
-  let t = 0;
-  const segments = [];
-  for (const g of groups) {
-    segments.push({
-      groupIndex: g.index,
-      startMs: t,
-      dropDurationMs: DROP_DURATION_MS,
-      fallOffsetCells: FALL_OFFSET_CELLS,
-      cells: g.cells
-    });
-    t += DROP_DURATION_MS;
+function buildStrictDropSchedule(groups) {
+  const orderedBands = [...groups].sort((a, b) => a.xStart - b.xStart || a.index - b.index);
+  const allPlacements = [];
+  for (const g of orderedBands) {
+    const gf = buildGroupFrames(g);
+    for (const p of gf) {
+      allPlacements.push(p);
+    }
   }
-  return segments;
+  const frames = allPlacements.map((placements) => ({ placements }));
+  return {
+    stepDurationMs: STRICT_STEP_MS,
+    frames,
+    holdAfterLastMs: HOLD_AFTER_LAST_MS
+  };
 }
-function totalCycleMs(segments) {
-  if (segments.length === 0) return HOLD_AFTER_LAST_MS;
-  const last = segments[segments.length - 1];
-  return last.startMs + last.dropDurationMs + HOLD_AFTER_LAST_MS;
+function buildDropSchedule(groups) {
+  return buildStrictDropSchedule(groups);
+}
+function totalCycleMs(schedule) {
+  const { frames, stepDurationMs, holdAfterLastMs } = schedule;
+  if (frames.length === 0) return holdAfterLastMs;
+  return frames.length * stepDurationMs + holdAfterLastMs;
 }
 
 // src/renderer/svgRenderer.ts
@@ -276,7 +346,8 @@ var PALETTE_LIGHT = {
   level1: "#9be9a8",
   level2: "#40c463",
   level3: "#30a14e",
-  level4: "#216e39"
+  level4: "#216e39",
+  cellBorder: "rgba(27,31,36,0.12)"
 };
 var PALETTE_DARK = {
   canvas: "#0d1117",
@@ -284,7 +355,8 @@ var PALETTE_DARK = {
   level1: "#0e4429",
   level2: "#006d32",
   level3: "#26a641",
-  level4: "#39d353"
+  level4: "#39d353",
+  cellBorder: "rgba(255,255,255,0.08)"
 };
 var DEFAULT_SAFE_COLOR = "#ebedf0";
 var CSS_NAMED_COLORS = new Set(
@@ -363,51 +435,28 @@ function sanitizeGrassPalette(p) {
     level1: validateColor(p.level1),
     level2: validateColor(p.level2),
     level3: validateColor(p.level3),
-    level4: validateColor(p.level4)
+    level4: validateColor(p.level4),
+    cellBorder: validateColor(p.cellBorder)
   };
 }
-var cellSize = 18;
-var step = 20;
+var STEP = 20;
+var DOT_SIZE = 12;
+var DOT_MARGIN = (STEP - DOT_SIZE) / 2;
 var PAD = 2;
 var RX = 2;
+var STROKE_WIDTH = 0.5;
 var CYCLE_TAIL_RESET = 12e-4;
 var SMIL_KEY_GAP = 2e-6;
-function clampSmilKeyframeFractions(startMs, dropDurationMs, cycleMs) {
-  const cycle = Math.max(1, cycleMs);
-  const g = SMIL_KEY_GAP;
-  const rTail = Math.max(0, 1 - CYCLE_TAIL_RESET);
-  const bRaw = (startMs + dropDurationMs) / cycle;
-  const aRaw = startMs / cycle;
-  if (aRaw <= Number.EPSILON) {
-    let b2 = Math.min(bRaw, rTail - g);
-    b2 = Math.max(b2, g);
-    let r2 = Math.max(rTail, b2 + g);
-    r2 = Math.min(r2, 1 - g);
-    return { mode: "zero", b: b2, r: r2 };
-  }
-  let a = Math.min(aRaw, rTail - 3 * g);
-  a = Math.max(a, g);
-  let b = Math.min(bRaw, rTail - g);
-  b = Math.max(b, a + g);
-  let r = Math.max(rTail, b + g);
-  r = Math.min(r, 1 - g);
-  if (!(a < b && b < r)) {
-    a = g;
-    b = 3 * g;
-    r = 1 - g;
-  }
-  return { mode: "off", a, b, r };
-}
-function cellPx(x, y) {
-  return { px: PAD + x * step, py: PAD + y * step };
+function cellBasePx(x, y) {
+  return { px: PAD + x * STEP + DOT_MARGIN, py: PAD + y * STEP + DOT_MARGIN };
 }
 function cellUse(x, y, href) {
-  const { px, py } = cellPx(x, y);
+  const { px, py } = cellBasePx(x, y);
   return `<use href="#${href}" x="${px}" y="${py}"/>`;
 }
 function buildSymbols(p) {
-  const { emptyCell: e, level1: l1, level2: l2, level3: l3, level4: l4 } = p;
-  const sym = (id, fill) => `<symbol id="${id}" viewBox="0 0 ${cellSize} ${cellSize}"><rect width="${cellSize}" height="${cellSize}" fill="${fill}" rx="${RX}"/></symbol>`;
+  const { emptyCell: e, level1: l1, level2: l2, level3: l3, level4: l4, cellBorder: b } = p;
+  const sym = (id, fill) => `<symbol id="${id}" viewBox="0 0 ${DOT_SIZE} ${DOT_SIZE}"><rect width="${DOT_SIZE}" height="${DOT_SIZE}" fill="${fill}" stroke="${b}" stroke-width="${STROKE_WIDTH}" rx="${RX}"/></symbol>`;
   return `<defs>
 ${sym("cE", e)}
 ${sym("cG1", l1)}
@@ -419,21 +468,70 @@ ${sym("cG4", l4)}
 function levelHref(level) {
   return `cG${level}`;
 }
-function smilDropTimeline(startMs, dropDurationMs, cycleMs, fallPx) {
-  const k = clampSmilKeyframeFractions(startMs, dropDurationMs, cycleMs);
+function buildFrameIndex(schedule) {
+  return schedule.frames.map((fr) => {
+    const m = /* @__PURE__ */ new Map();
+    for (const p of fr.placements) {
+      m.set(`${p.sourceX},${p.sourceY}`, p);
+    }
+    return m;
+  });
+}
+function placementForFrame(sx, sy, frameIndex, index) {
+  if (frameIndex < 0 || frameIndex >= index.length) return null;
+  const p = index[frameIndex].get(`${sx},${sy}`);
+  if (!p) return { absY: sy, visible: false };
+  return { absY: p.absY, visible: true };
+}
+function buildCellSmil(sx, sy, schedule, frameIndex, cycleMs) {
+  const F = schedule.frames.length;
+  const stepMs = schedule.stepDurationMs;
   const fmt = (t) => t.toFixed(6);
-  if (k.mode === "zero") {
-    return {
-      keyTimes: `0;${fmt(k.b)};${fmt(k.r)};1`,
-      translateValues: `0,-${fallPx};0,0;0,0;0,-${fallPx}`,
-      opValues: `1;1;0;0`
-    };
+  if (F === 0) {
+    return { keyTimes: "0;1", opValues: "0;0", tyValues: "0 0;0 0" };
+  }
+  const g = SMIL_KEY_GAP;
+  const rTail = Math.max(0, 1 - CYCLE_TAIL_RESET);
+  const fracs = [0];
+  for (let i = 1; i <= F; i++) {
+    const raw = i * stepMs / cycleMs;
+    fracs.push(Math.max(raw, fracs[fracs.length - 1] + g));
+  }
+  fracs.push(Math.max(fracs[fracs.length - 1] + g, Math.min(rTail, 1 - 2 * g)));
+  fracs.push(1);
+  const opVals = [];
+  const tyVals = [];
+  const n = fracs.length;
+  for (let k = 0; k < n; k++) {
+    let frameIdx;
+    if (k <= F - 1) frameIdx = k;
+    else if (k === n - 2) frameIdx = 0;
+    else if (k === n - 1) frameIdx = 0;
+    else frameIdx = F - 1;
+    const st = placementForFrame(sx, sy, frameIdx, frameIndex);
+    if (!st || !st.visible) {
+      opVals.push("0");
+      tyVals.push("0 0");
+    } else {
+      opVals.push("1");
+      tyVals.push(`0 ${(st.absY - sy) * STEP}`);
+    }
   }
   return {
-    keyTimes: `0;${fmt(k.a)};${fmt(k.b)};${fmt(k.r)};1`,
-    translateValues: `0,-${fallPx};0,-${fallPx};0,0;0,0;0,-${fallPx}`,
-    opValues: `0;1;1;0;0`
+    keyTimes: fracs.map(fmt).join(";"),
+    opValues: opVals.join(";"),
+    tyValues: tyVals.join(";")
   };
+}
+function collectSourceCells(schedule) {
+  const m = /* @__PURE__ */ new Map();
+  for (const fr of schedule.frames) {
+    for (const p of fr.placements) {
+      const k = `${p.sourceX},${p.sourceY}`;
+      if (!m.has(k)) m.set(k, p.level);
+    }
+  }
+  return m;
 }
 function renderEmptyGrid() {
   let s = "";
@@ -444,32 +542,33 @@ function renderEmptyGrid() {
   }
   return s;
 }
-function renderGroupDrop(seg, cycleMs) {
-  const fallPx = seg.fallOffsetCells * step;
-  const { startMs, dropDurationMs } = seg;
-  const { keyTimes, translateValues, opValues } = smilDropTimeline(startMs, dropDurationMs, cycleMs, fallPx);
-  const inner = seg.cells.map((c) => {
-    const href = levelHref(c.level);
-    return cellUse(c.x, c.y, href);
-  }).join("\n");
-  if (!inner) {
-    return "";
-  }
+function renderAnimatedGrassCell(sx, sy, level, schedule, frameIndex, cycleMs) {
+  const { keyTimes, opValues, tyValues } = buildCellSmil(sx, sy, schedule, frameIndex, cycleMs);
+  const href = levelHref(level);
   return `<g>
 <animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes}" values="${opValues}"/>
 <g>
-<animateTransform attributeName="transform" type="translate" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="linear" keyTimes="${keyTimes}" values="${translateValues}"/>
-${inner}
+<animateTransform attributeName="transform" type="translate" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes}" values="${tyValues}"/>
+${cellUse(sx, sy, href)}
 </g>
 </g>`;
 }
-function buildGrassDropSvg(segments, palette) {
-  if (segments.length === 0) throw new Error("No drop segments");
+function buildGrassDropSvg(schedule, palette) {
   const safe = sanitizeGrassPalette(palette);
-  const cycleMs = totalCycleMs(segments);
-  const boardW = GRID_VISIBLE_WEEKS * step + PAD * 2;
-  const boardH = GRID_WEEKDAYS * step + PAD * 2;
-  const drops = segments.map((s) => renderGroupDrop(s, cycleMs)).filter((x) => x.length > 0).join("\n");
+  const cycleMs = totalCycleMs(schedule);
+  const boardW = GRID_VISIBLE_WEEKS * STEP + PAD * 2;
+  const boardH = GRID_WEEKDAYS * STEP + PAD * 2;
+  const fIdx = buildFrameIndex(schedule);
+  const sources = collectSourceCells(schedule);
+  const drops = [...sources.entries()].sort((a, b) => {
+    const [ax, ay] = a[0].split(",").map(Number);
+    const [bx, by] = b[0].split(",").map(Number);
+    if (ax !== bx) return ax - bx;
+    return ay - by;
+  }).map(([key, lvl]) => {
+    const [sx, sy] = key.split(",").map(Number);
+    return renderAnimatedGrassCell(sx, sy, lvl, schedule, fIdx, cycleMs);
+  }).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${boardW}" height="${boardH}" viewBox="0 0 ${boardW} ${boardH}" role="img" aria-label="Contribution graph animation">
 <title>Tetrass</title>
@@ -549,7 +648,7 @@ async function runTetrassGenerate(opts) {
   });
   const { board, meta } = contributionCalendarToLevelBoard(cal);
   const groups = splitBoardIntoColumnGroups(board, meta);
-  const segments = buildDropSchedule(groups);
+  const schedule = buildDropSchedule(groups);
   const { workspaceRootResolved, workspaceRootCanonical } = resolveWorkspaceRoots(workspaceRoot);
   const outputsForRender = workspaceRootResolved != null ? outputs.map((o) => ({
     ...o,
@@ -565,10 +664,10 @@ async function runTetrassGenerate(opts) {
   const neededPalettes = new Set(outputsForRender.map((o) => o.palette));
   const svgByPalette = /* @__PURE__ */ new Map();
   if (neededPalettes.has("light")) {
-    svgByPalette.set("light", buildGrassDropSvg(segments, paletteFor("light")));
+    svgByPalette.set("light", buildGrassDropSvg(schedule, paletteFor("light")));
   }
   if (neededPalettes.has("dark")) {
-    svgByPalette.set("dark", buildGrassDropSvg(segments, paletteFor("dark")));
+    svgByPalette.set("dark", buildGrassDropSvg(schedule, paletteFor("dark")));
   }
   await renderAndWriteGrassOutputs({
     svgByPalette,
@@ -634,9 +733,9 @@ function canonicalizeOutputPathUnderWorkspace(lexicalAbs, workspaceResolved) {
   const parts = rel.split(sep).filter((p) => p.length > 0);
   let cur = rootCanon;
   for (let i = 0; i < parts.length; i++) {
-    const step2 = join(cur, parts[i]);
-    if (existsSync(step2)) {
-      cur = realpathSync(step2);
+    const step = join(cur, parts[i]);
+    if (existsSync(step)) {
+      cur = realpathSync(step);
       assertPathInsideRoot(cur, rootCanon);
     } else {
       cur = join(cur, ...parts.slice(i));

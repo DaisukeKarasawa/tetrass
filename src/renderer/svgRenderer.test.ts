@@ -8,7 +8,6 @@ import {
   PALETTE_DARK,
   PALETTE_LIGHT,
   sanitizeGrassPalette,
-  smilDropKeyTimesForTest,
   validateColor,
 } from "./svgRenderer.js";
 
@@ -31,6 +30,19 @@ describe("validateColor / sanitizeGrassPalette", () => {
 });
 
 describe("buildGrassDropSvg", () => {
+  it("uses tx,ty pairs for translate animateTransform values (vertical motion, not horizontal)", () => {
+    const { board, meta } = contributionDaysToLevelBoard(buildSampleContributionDays());
+    const schedule = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const svg = buildGrassDropSvg(schedule, PALETTE_DARK);
+    const translateValues = [...svg.matchAll(/type="translate"[^>]*values="([^"]*)"/g)].map((m) => m[1]!);
+    expect(translateValues.length).toBeGreaterThan(0);
+    for (const vals of translateValues) {
+      for (const pair of vals.split(";")) {
+        expect(pair).toMatch(/^-?\d+(?:\.\d+)?\s-?\d+(?:\.\d+)?$/);
+      }
+    }
+  });
+
   it("emits a looping SVG with level symbols and expected dimensions", () => {
     /** Keep in sync with `svgRenderer`: 18px cell + 2px gutter, PAD 2 */
     const step = 20;
@@ -40,9 +52,9 @@ describe("buildGrassDropSvg", () => {
 
     const { board, meta } = contributionDaysToLevelBoard(buildSampleContributionDays());
     const groups = splitBoardIntoColumnGroups(board, meta);
-    const segments = buildDropSchedule(groups);
-    const svg = buildGrassDropSvg(segments, PALETTE_DARK);
-    const svg2 = buildGrassDropSvg(segments, PALETTE_DARK);
+    const schedule = buildDropSchedule(groups);
+    const svg = buildGrassDropSvg(schedule, PALETTE_DARK);
+    const svg2 = buildGrassDropSvg(schedule, PALETTE_DARK);
 
     expect(svg).toBe(svg2);
     expect(svg).toContain('repeatCount="indefinite"');
@@ -56,16 +68,16 @@ describe("buildGrassDropSvg", () => {
 
   it("uses light canvas and empty cell colors", () => {
     const { board, meta } = contributionDaysToLevelBoard([]);
-    const segments = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
-    const svg = buildGrassDropSvg(segments, PALETTE_LIGHT);
+    const schedule = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const svg = buildGrassDropSvg(schedule, PALETTE_LIGHT);
     expect(svg).toContain(PALETTE_LIGHT.canvas);
     expect(svg).toContain('id="cE"');
   });
 
   it("keeps grassDrops present but empty when the board is all zeros (stable id)", () => {
     const { board, meta } = contributionDaysToLevelBoard([]);
-    const segments = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
-    const svg = buildGrassDropSvg(segments, PALETTE_DARK);
+    const schedule = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const svg = buildGrassDropSvg(schedule, PALETTE_DARK);
     expect(svg).toContain('<g id="grassDrops">');
     expect(svg).not.toContain("<animate");
     expect(svg).toMatch(/<g id="grassDrops">\s*<\/g>/);
@@ -73,8 +85,8 @@ describe("buildGrassDropSvg", () => {
 
   it("renders non-zero grass symbols with light palette fills", () => {
     const { board, meta } = contributionDaysToLevelBoard(buildSampleContributionDays());
-    const segments = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
-    const svg = buildGrassDropSvg(segments, PALETTE_LIGHT);
+    const schedule = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const svg = buildGrassDropSvg(schedule, PALETTE_LIGHT);
     expect(svg).toContain(`fill="${PALETTE_LIGHT.level1}"`);
     expect(svg).toContain(`fill="${PALETTE_LIGHT.level4}"`);
     expect(svg).toContain('href="#cG1"');
@@ -83,15 +95,19 @@ describe("buildGrassDropSvg", () => {
 
   it("does not duplicate the leading keyTimes 0 when the first group starts at 0ms", () => {
     const { board, meta } = contributionDaysToLevelBoard(buildSampleContributionDays());
-    const segments = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
-    const svg = buildGrassDropSvg(segments, PALETTE_DARK);
+    const schedule = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const svg = buildGrassDropSvg(schedule, PALETTE_DARK);
     expect(svg).not.toMatch(/keyTimes="0;0\.0+/);
   });
 
-  it("keeps smil keyTimes strictly increasing after toFixed(6) when raw b nears 1 or exceeds rTail", () => {
-    expectStrictIncreasingKeyTimes(smilDropKeyTimesForTest(0, 420, 420));
-    expectStrictIncreasingKeyTimes(smilDropKeyTimesForTest(0, 420, 421));
-    expectStrictIncreasingKeyTimes(smilDropKeyTimesForTest(40, 60, 100));
-    expectStrictIncreasingKeyTimes(smilDropKeyTimesForTest(1, 499, 500));
+  it("keeps smil keyTimes strictly increasing in rendered SVG output", () => {
+    const { board, meta } = contributionDaysToLevelBoard(buildSampleContributionDays());
+    const schedule = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    const svg = buildGrassDropSvg(schedule, PALETTE_DARK);
+    const allKeyTimes = [...svg.matchAll(/keyTimes="([^"]*)"/g)].map((m) => m[1]!);
+    expect(allKeyTimes.length).toBeGreaterThan(0);
+    for (const kt of allKeyTimes) {
+      expectStrictIncreasingKeyTimes(kt);
+    }
   });
 });

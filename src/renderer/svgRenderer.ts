@@ -1,4 +1,4 @@
-import type { GrassDropLevel, GroupDropSegment } from "../domain/grass.js";
+import type { GrassDropLevel, GrassPlacement, GrassStrictSchedule } from "../domain/grass.js";
 import { GRID_VISIBLE_WEEKS, GRID_WEEKDAYS } from "../domain/grass.js";
 import { totalCycleMs } from "../grass/groupDropPlanner.js";
 
@@ -14,6 +14,8 @@ export interface GrassPalette {
   level4: string;
   /** SVG canvas behind the grid (page background). */
   canvas: string;
+  /** Subtle border around each dot (snk-style separation in README thumbnails). */
+  cellBorder: string;
 }
 
 export const PALETTE_LIGHT: GrassPalette = {
@@ -23,6 +25,7 @@ export const PALETTE_LIGHT: GrassPalette = {
   level2: "#40c463",
   level3: "#30a14e",
   level4: "#216e39",
+  cellBorder: "rgba(27,31,36,0.12)",
 };
 
 export const PALETTE_DARK: GrassPalette = {
@@ -32,6 +35,7 @@ export const PALETTE_DARK: GrassPalette = {
   level2: "#006d32",
   level3: "#26a641",
   level4: "#39d353",
+  cellBorder: "rgba(255,255,255,0.08)",
 };
 
 const DEFAULT_SAFE_COLOR = "#ebedf0";
@@ -128,75 +132,35 @@ export function sanitizeGrassPalette(p: GrassPalette): GrassPalette {
     level2: validateColor(p.level2),
     level3: validateColor(p.level3),
     level4: validateColor(p.level4),
+    cellBorder: validateColor(p.cellBorder),
   };
 }
 
-const cellSize = 18;
-const step = 20; // cellSize + 2px gap
+/** Grid pitch (placement step) in user units. */
+const STEP = 20;
+/** Inner dot size (snk-style: smaller than pitch for visible gutters). */
+const DOT_SIZE = 12;
+const DOT_MARGIN = (STEP - DOT_SIZE) / 2;
 const PAD = 2;
 const RX = 2;
+const STROKE_WIDTH = 0.5;
 /** Fraction of cycle used to snap back to the initial state before repeat. */
 const CYCLE_TAIL_RESET = 0.0012;
-/**
- * Minimum spacing between consecutive normalized keyTimes so `toFixed(6)` stays strictly increasing
- * (SMIL requires strictly monotonic keyTimes).
- */
 const SMIL_KEY_GAP = 2e-6;
 
-type SmilKeyframeFrac =
-  | { mode: "zero"; b: number; r: number }
-  | { mode: "off"; a: number; b: number; r: number };
-
-/** Normalize drop endpoints so `0 < b < r < 1` (or `0 < a < b < r < 1`) before formatting. */
-function clampSmilKeyframeFractions(
-  startMs: number,
-  dropDurationMs: number,
-  cycleMs: number,
-): SmilKeyframeFrac {
-  const cycle = Math.max(1, cycleMs);
-  const g = SMIL_KEY_GAP;
-
-  const rTail = Math.max(0, 1 - CYCLE_TAIL_RESET);
-  const bRaw = (startMs + dropDurationMs) / cycle;
-  const aRaw = startMs / cycle;
-
-  if (aRaw <= Number.EPSILON) {
-    let b = Math.min(bRaw, rTail - g);
-    b = Math.max(b, g);
-    let r = Math.max(rTail, b + g);
-    r = Math.min(r, 1 - g);
-    return { mode: "zero", b, r };
-  }
-
-  let a = Math.min(aRaw, rTail - 3 * g);
-  a = Math.max(a, g);
-  let b = Math.min(bRaw, rTail - g);
-  b = Math.max(b, a + g);
-  let r = Math.max(rTail, b + g);
-  r = Math.min(r, 1 - g);
-
-  if (!(a < b && b < r)) {
-    a = g;
-    b = 3 * g;
-    r = 1 - g;
-  }
-
-  return { mode: "off", a, b, r };
-}
-
-function cellPx(x: number, y: number): { px: number; py: number } {
-  return { px: PAD + x * step, py: PAD + y * step };
+function cellBasePx(x: number, y: number): { px: number; py: number } {
+  return { px: PAD + x * STEP + DOT_MARGIN, py: PAD + y * STEP + DOT_MARGIN };
 }
 
 function cellUse(x: number, y: number, href: string): string {
-  const { px, py } = cellPx(x, y);
+  const { px, py } = cellBasePx(x, y);
   return `<use href="#${href}" x="${px}" y="${py}"/>`;
 }
 
 function buildSymbols(p: GrassPalette): string {
-  const { emptyCell: e, level1: l1, level2: l2, level3: l3, level4: l4 } = p;
+  const { emptyCell: e, level1: l1, level2: l2, level3: l3, level4: l4, cellBorder: b } = p;
   const sym = (id: string, fill: string) =>
-    `<symbol id="${id}" viewBox="0 0 ${cellSize} ${cellSize}"><rect width="${cellSize}" height="${cellSize}" fill="${fill}" rx="${RX}"/></symbol>`;
+    `<symbol id="${id}" viewBox="0 0 ${DOT_SIZE} ${DOT_SIZE}"><rect width="${DOT_SIZE}" height="${DOT_SIZE}" fill="${fill}" stroke="${b}" stroke-width="${STROKE_WIDTH}" rx="${RX}"/></symbol>`;
   return `<defs>
 ${sym("cE", e)}
 ${sym("cG1", l1)}
@@ -210,32 +174,92 @@ function levelHref(level: GrassDropLevel): string {
   return `cG${level}`;
 }
 
-/** SMIL keyTimes must be strictly increasing; when `startMs === 0`, omit the duplicate leading `0`. */
-function smilDropTimeline(
-  startMs: number,
-  dropDurationMs: number,
+/** Pre-indexed frame placements: frameIndex → "sx,sy" → placement. */
+type FramePlacementIndex = Map<string, GrassPlacement>[];
+
+function buildFrameIndex(schedule: GrassStrictSchedule): FramePlacementIndex {
+  return schedule.frames.map((fr) => {
+    const m = new Map<string, GrassPlacement>();
+    for (const p of fr.placements) {
+      m.set(`${p.sourceX},${p.sourceY}`, p);
+    }
+    return m;
+  });
+}
+
+function placementForFrame(
+  sx: number,
+  sy: number,
+  frameIndex: number,
+  index: FramePlacementIndex,
+): { absY: number; visible: boolean } | null {
+  if (frameIndex < 0 || frameIndex >= index.length) return null;
+  const p = index[frameIndex]!.get(`${sx},${sy}`);
+  if (!p) return { absY: sy, visible: false };
+  return { absY: p.absY, visible: true };
+}
+
+function buildCellSmil(
+  sx: number,
+  sy: number,
+  schedule: GrassStrictSchedule,
+  frameIndex: FramePlacementIndex,
   cycleMs: number,
-  fallPx: number,
-): { keyTimes: string; translateValues: string; opValues: string } {
-  const k = clampSmilKeyframeFractions(startMs, dropDurationMs, cycleMs);
+): { keyTimes: string; opValues: string; tyValues: string } {
+  const F = schedule.frames.length;
+  const stepMs = schedule.stepDurationMs;
   const fmt = (t: number): string => t.toFixed(6);
-  if (k.mode === "zero") {
-    return {
-      keyTimes: `0;${fmt(k.b)};${fmt(k.r)};1`,
-      translateValues: `0,-${fallPx};0,0;0,0;0,-${fallPx}`,
-      opValues: `1;1;0;0`,
-    };
+
+  if (F === 0) {
+    return { keyTimes: "0;1", opValues: "0;0", tyValues: "0 0;0 0" };
   }
+
+  const g = SMIL_KEY_GAP;
+  const rTail = Math.max(0, 1 - CYCLE_TAIL_RESET);
+  const fracs: number[] = [0];
+  for (let i = 1; i <= F; i++) {
+    const raw = (i * stepMs) / cycleMs;
+    fracs.push(Math.max(raw, fracs[fracs.length - 1]! + g));
+  }
+  fracs.push(Math.max(fracs[fracs.length - 1]! + g, Math.min(rTail, 1 - 2 * g)));
+  fracs.push(1);
+
+  const opVals: string[] = [];
+  const tyVals: string[] = [];
+  const n = fracs.length;
+  for (let k = 0; k < n; k++) {
+    let frameIdx: number;
+    if (k <= F - 1) frameIdx = k;
+    else if (k === n - 2) frameIdx = 0;
+    else if (k === n - 1) frameIdx = 0;
+    else frameIdx = F - 1;
+
+    const st = placementForFrame(sx, sy, frameIdx, frameIndex);
+    if (!st || !st.visible) {
+      opVals.push("0");
+      tyVals.push("0 0");
+    } else {
+      opVals.push("1");
+      tyVals.push(`0 ${(st.absY - sy) * STEP}`);
+    }
+  }
+
   return {
-    keyTimes: `0;${fmt(k.a)};${fmt(k.b)};${fmt(k.r)};1`,
-    translateValues: `0,-${fallPx};0,-${fallPx};0,0;0,0;0,-${fallPx}`,
-    opValues: `0;1;1;0;0`,
+    keyTimes: fracs.map(fmt).join(";"),
+    opValues: opVals.join(";"),
+    tyValues: tyVals.join(";"),
   };
 }
 
-/** Exposed for unit tests: normalized SMIL keyTimes for one drop segment. */
-export function smilDropKeyTimesForTest(startMs: number, dropDurationMs: number, cycleMs: number): string {
-  return smilDropTimeline(startMs, dropDurationMs, cycleMs, 0).keyTimes;
+function collectSourceCells(schedule: GrassStrictSchedule): Map<string, GrassDropLevel> {
+  const m = new Map<string, GrassDropLevel>();
+  for (const fr of schedule.frames) {
+    for (const p of fr.placements) {
+      const k = `${p.sourceX},${p.sourceY}`;
+      if (!m.has(k)) m.set(k, p.level);
+    }
+  }
+  return m;
 }
 
 function renderEmptyGrid(): string {
@@ -248,46 +272,48 @@ function renderEmptyGrid(): string {
   return s;
 }
 
-function renderGroupDrop(
-  seg: GroupDropSegment,
+function renderAnimatedGrassCell(
+  sx: number,
+  sy: number,
+  level: GrassDropLevel,
+  schedule: GrassStrictSchedule,
+  frameIndex: FramePlacementIndex,
   cycleMs: number,
 ): string {
-  const fallPx = seg.fallOffsetCells * step;
-  const { startMs, dropDurationMs } = seg;
-  const { keyTimes, translateValues, opValues } = smilDropTimeline(startMs, dropDurationMs, cycleMs, fallPx);
-
-  const inner = seg.cells
-    .map((c) => {
-      const href = levelHref(c.level);
-      return cellUse(c.x, c.y, href);
-    })
-    .join("\n");
-
-  if (!inner) {
-    return "";
-  }
-
+  const { keyTimes, opValues, tyValues } = buildCellSmil(sx, sy, schedule, frameIndex, cycleMs);
+  const href = levelHref(level);
   return `<g>
 <animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes}" values="${opValues}"/>
 <g>
-<animateTransform attributeName="transform" type="translate" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="linear" keyTimes="${keyTimes}" values="${translateValues}"/>
-${inner}
+<animateTransform attributeName="transform" type="translate" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes}" values="${tyValues}"/>
+${cellUse(sx, sy, href)}
 </g>
 </g>`;
 }
 
 /**
- * Animated SVG: empty grid + nine column groups falling sequentially with contribution levels.
+ * Animated SVG: empty grid + strict per-cell drop timeline (left groups, parallel columns).
  */
-export function buildGrassDropSvg(segments: GroupDropSegment[], palette: GrassPalette): string {
-  if (segments.length === 0) throw new Error("No drop segments");
-
+export function buildGrassDropSvg(schedule: GrassStrictSchedule, palette: GrassPalette): string {
   const safe = sanitizeGrassPalette(palette);
-  const cycleMs = totalCycleMs(segments);
-  const boardW = GRID_VISIBLE_WEEKS * step + PAD * 2;
-  const boardH = GRID_WEEKDAYS * step + PAD * 2;
+  const cycleMs = totalCycleMs(schedule);
+  const boardW = GRID_VISIBLE_WEEKS * STEP + PAD * 2;
+  const boardH = GRID_WEEKDAYS * STEP + PAD * 2;
 
-  const drops = segments.map((s) => renderGroupDrop(s, cycleMs)).filter((x) => x.length > 0).join("\n");
+  const fIdx = buildFrameIndex(schedule);
+  const sources = collectSourceCells(schedule);
+  const drops = [...sources.entries()]
+    .sort((a, b) => {
+      const [ax, ay] = a[0].split(",").map(Number);
+      const [bx, by] = b[0].split(",").map(Number);
+      if (ax !== bx) return ax - bx;
+      return ay - by;
+    })
+    .map(([key, lvl]) => {
+      const [sx, sy] = key.split(",").map(Number) as [number, number];
+      return renderAnimatedGrassCell(sx, sy, lvl, schedule, fIdx, cycleMs);
+    })
+    .join("\n");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${boardW}" height="${boardH}" viewBox="0 0 ${boardW} ${boardH}" role="img" aria-label="Contribution graph animation">

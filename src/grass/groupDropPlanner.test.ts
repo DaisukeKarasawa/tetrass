@@ -3,12 +3,14 @@ import { describe, expect, it } from "vitest";
 import { createEmptyLevelBoard, GRID_VISIBLE_WEEKS, groupColumnRanges } from "../domain/grass.js";
 import {
   buildDropSchedule,
-  DROP_DURATION_MS,
+  buildStrictDropSchedule,
   HOLD_AFTER_LAST_MS,
   splitBoardIntoColumnGroups,
+  STRICT_STEP_MS,
   totalCycleMs,
 } from "./groupDropPlanner.js";
 import { contributionDaysToLevelBoard, type ContributionDay } from "../io/contributions.js";
+import { expectedGroup0TwoCellColumnFrames, normalizeGolden } from "./strictDropFixture.js";
 
 describe("groupColumnRanges", () => {
   it("sums to 53 columns with eight 6-wide bands and one 5-wide", () => {
@@ -64,27 +66,107 @@ describe("splitBoardIntoColumnGroups", () => {
   });
 });
 
-describe("buildDropSchedule", () => {
-  it("starts each group after the previous drop finishes", () => {
-    const { board, meta } = contributionDaysToLevelBoard([]);
+describe("buildStrictDropSchedule / golden group0", () => {
+  it("matches strict 7-frame drop for one column with two grass cells (y=0 and y=6)", () => {
+    const board = createEmptyLevelBoard();
+    board[0]![2] = 1;
+    board[6]![2] = 1;
+    const meta = board.map((row, y) =>
+      row.map((_, x) => ({
+        date: `d-${y}-${x}`,
+        contributionCount: board[y]![x]! > 0 ? 1 : 0,
+      })),
+    );
     const groups = splitBoardIntoColumnGroups(board, meta);
-    const segs = buildDropSchedule(groups);
-    expect(segs).toHaveLength(9);
-    for (let i = 0; i < segs.length; i++) {
-      expect(segs[i]!.startMs).toBe(i * DROP_DURATION_MS);
+    const schedule = buildStrictDropSchedule(groups);
+    expect(schedule.frames).toHaveLength(7);
+    const expected = expectedGroup0TwoCellColumnFrames();
+    for (let i = 0; i < 7; i++) {
+      const got = normalizeGolden(
+        schedule.frames[i]!.placements.map((p) => ({
+          displayX: p.absX,
+          displayY: p.absY,
+          sourceX: p.sourceX,
+          sourceY: p.sourceY,
+          level: p.level,
+        })),
+      );
+      expect(got).toEqual(normalizeGolden(expected[i]!));
     }
   });
 });
 
-describe("totalCycleMs", () => {
-  it("returns hold-only duration when there are no segments", () => {
-    expect(totalCycleMs([])).toBe(HOLD_AFTER_LAST_MS);
+describe("buildDropSchedule", () => {
+  it("returns a schedule with step duration and nine group-derived frame chunks", () => {
+    const { board, meta } = contributionDaysToLevelBoard([]);
+    const groups = splitBoardIntoColumnGroups(board, meta);
+    const schedule = buildDropSchedule(groups);
+    expect(schedule.stepDurationMs).toBe(STRICT_STEP_MS);
+    expect(schedule.frames).toHaveLength(0);
+    expect(schedule.holdAfterLastMs).toBe(HOLD_AFTER_LAST_MS);
   });
 
-  it("extends through the last drop plus hold", () => {
+  it("runs groups strictly left-to-right: later group frames never appear before earlier group finishes", () => {
+    const board = createEmptyLevelBoard();
+    board[0]![0] = 1;
+    board[0]![6] = 1;
+    const meta = board.map((row, y) =>
+      row.map((_, x) => ({
+        date: `d-${y}-${x}`,
+        contributionCount: board[y]![x]! > 0 ? 1 : 0,
+      })),
+    );
+    const schedule = buildStrictDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    expect(schedule.frames.length).toBeGreaterThanOrEqual(2);
+    const firstGroupXMax = groupColumnRanges()[0]!.xEndInclusive;
+    const secondGroupXMin = groupColumnRanges()[1]!.xStart;
+    let seenSecond = false;
+    for (const fr of schedule.frames) {
+      const hasSecond = fr.placements.some((p) => p.absX >= secondGroupXMin);
+      const hasFirst = fr.placements.some((p) => p.absX <= firstGroupXMax);
+      if (hasSecond) seenSecond = true;
+      if (hasFirst && seenSecond) {
+        throw new Error("Expected group 0 to finish before group 1 placements appear");
+      }
+    }
+    const idxSecond = schedule.frames.findIndex((fr) =>
+      fr.placements.some((p) => p.absX >= secondGroupXMin),
+    );
+    let idxFirstLast = -1;
+    for (let i = schedule.frames.length - 1; i >= 0; i--) {
+      if (schedule.frames[i]!.placements.some((p) => p.absX <= firstGroupXMax)) {
+        idxFirstLast = i;
+        break;
+      }
+    }
+    expect(idxSecond).toBeGreaterThan(idxFirstLast);
+  });
+});
+
+describe("totalCycleMs", () => {
+  it("returns hold-only duration when there are no frames", () => {
+    expect(
+      totalCycleMs({ frames: [], stepDurationMs: STRICT_STEP_MS, holdAfterLastMs: HOLD_AFTER_LAST_MS }),
+    ).toBe(HOLD_AFTER_LAST_MS);
+  });
+
+  it("extends through all frames plus hold", () => {
     const { board, meta } = contributionDaysToLevelBoard([]);
-    const segs = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
-    const last = segs[segs.length - 1]!;
-    expect(totalCycleMs(segs)).toBe(last.startMs + last.dropDurationMs + HOLD_AFTER_LAST_MS);
+    const schedule = buildDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    expect(totalCycleMs(schedule)).toBe(schedule.frames.length * STRICT_STEP_MS + HOLD_AFTER_LAST_MS);
+  });
+
+  it("matches golden board frame count times step plus hold", () => {
+    const board = createEmptyLevelBoard();
+    board[0]![2] = 1;
+    board[6]![2] = 1;
+    const meta = board.map((row, y) =>
+      row.map((_, x) => ({
+        date: `d-${y}-${x}`,
+        contributionCount: board[y]![x]! > 0 ? 1 : 0,
+      })),
+    );
+    const schedule = buildStrictDropSchedule(splitBoardIntoColumnGroups(board, meta));
+    expect(totalCycleMs(schedule)).toBe(7 * STRICT_STEP_MS + HOLD_AFTER_LAST_MS);
   });
 });

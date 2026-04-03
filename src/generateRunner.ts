@@ -116,7 +116,7 @@ export async function runTetrassGenerate(opts: GenerateOptions): Promise<void> {
   });
   const { board, meta } = contributionCalendarToLevelBoard(cal);
   const groups = splitBoardIntoColumnGroups(board, meta);
-  const segments = buildDropSchedule(groups);
+  const schedule = buildDropSchedule(groups);
 
   const { workspaceRootResolved, workspaceRootCanonical } = resolveWorkspaceRoots(workspaceRoot);
   const outputsForRender =
@@ -137,10 +137,10 @@ export async function runTetrassGenerate(opts: GenerateOptions): Promise<void> {
   const neededPalettes = new Set(outputsForRender.map((o) => o.palette));
   const svgByPalette = new Map<OutputPalette, string>();
   if (neededPalettes.has("light")) {
-    svgByPalette.set("light", buildGrassDropSvg(segments, paletteFor("light")));
+    svgByPalette.set("light", buildGrassDropSvg(schedule, paletteFor("light")));
   }
   if (neededPalettes.has("dark")) {
-    svgByPalette.set("dark", buildGrassDropSvg(segments, paletteFor("dark")));
+    svgByPalette.set("dark", buildGrassDropSvg(schedule, paletteFor("dark")));
   }
 
   await renderAndWriteGrassOutputs({
