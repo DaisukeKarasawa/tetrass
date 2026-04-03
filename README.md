@@ -1,6 +1,9 @@
 # Tetrass
 
-Deterministic (no randomness) Tetris-style animation for GitHub contribution “grass”, rendered as SVG for your profile README.
+Deterministic (no randomness) **animated GitHub contribution graph** (“grass”) as SVG for your profile README.  
+The UI matches the normal profile heatmap: **53×7** cells, one square per day, with **four green intensity levels** from GitHub’s `contributionLevel`.
+
+Animation: the year is split into **nine vertical bands** — eight **`6×7`** blocks and one **`5×7`** block (left → right). Each band **drops from above** with internal day positions fixed; bands run **sequentially** so earlier weeks land before later ones.
 
 ## Use from your profile repository (recommended, snk-style)
 
@@ -63,10 +66,11 @@ Use your default branch name in place of `main` if it differs.
 
 ## How it works
 
-1. Fetches the contribution calendar from the GitHub GraphQL API. The composite action uses `GITHUB_TOKEN` (`github.token`) and fails fast if it is missing unless you enable sample/offline mode. Locally, provide `GITHUB_TOKEN` for real data, set `TETRASS_USE_SAMPLE=1` (or `TETRASS_OFFLINE=1`) for offline sample data, or set `TETRASS_ALLOW_UNAUTH_FALLBACK=1` (CLI only) to allow a sample fallback when an unauthenticated fetch fails.
-2. Maps contributions to a GitHub-native weekly grid: **x = week index, y = weekday**, and keeps the visible 53-week window.
-3. Builds a deterministic replay with line clears and mixed block behavior (monomino + tetromino), then tiles the contribution mask so the final board matches the target exactly.
-4. Writes the SVG files you listed under `outputs`.
+1. Fetches the contribution calendar from the GitHub GraphQL API (`contributionCount` + **`contributionLevel`**). The composite action uses `GITHUB_TOKEN` (`github.token`) and fails fast if it is missing unless you enable sample/offline mode. Locally, provide `GITHUB_TOKEN` for real data, set `TETRASS_USE_SAMPLE=1` (or `TETRASS_OFFLINE=1`) for offline sample data, or set `TETRASS_ALLOW_UNAUTH_FALLBACK=1` (CLI only) to allow a sample fallback when an unauthenticated fetch fails.
+2. Maps contributions to a GitHub-native weekly grid: **x = week index, y = weekday**, **53 visible weeks** (right-aligned when history is shorter).
+3. Splits columns into **nine bands** `6+6+6+6+6+6+6+6+5` and builds a **fixed timeline** of SMIL animations (no Tetris / line-clear simulation).
+4. Renders an SVG with **light** or **dark** palettes aligned to GitHub-style greens.
+5. Writes the SVG files you listed under `outputs`.
 
 ## Local generation (this repo / development)
 
@@ -92,16 +96,11 @@ Offline / CI without API:
 TETRASS_USE_SAMPLE=1 npm run generate:tetrass
 ```
 
-Sample/offline mode uses a deterministic non-trivial board profile (not a single tetromino) so output remains visually meaningful.
+Sample/offline mode uses a deterministic calendar with varied `contributionLevel` values so the animation stays non-trivial.
 
-### Artifact-level correctness checks
+### Tests
 
-The integration tests validate output artifacts directly (not only internal planner state):
-
-- final SVG frame equals target board cell-for-cell,
-- both single-cell and multi-cell active drops appear in animation,
-- at least one line-clear-like transition occurs,
-- output stays within a practical profile-friendly size budget.
+`npm test` covers mapping, nine-band splitting, palette sanitization, and a small integration check that the SVG contains one grass `<use>` per non-zero cell in the sample board.
 
 CLI-only: if you intentionally run without `GITHUB_TOKEN` and want a deterministic sample when the public GraphQL request fails, set `TETRASS_ALLOW_UNAUTH_FALLBACK=1` (not recommended for workflows that should reflect real contributions).
 
@@ -109,8 +108,9 @@ CLI-only: if you intentionally run without `GITHUB_TOKEN` and want a determinist
 
 This repository includes a Tetrass-specific CodeRabbit setup in [`.coderabbit.yaml`](.coderabbit.yaml)
 focused on:
+
 - Action contract integrity (`action/action.yml` <-> parser <-> workflow <-> README)
-- Deterministic invariants (final board match, line clear, piece diversity)
+- Deterministic output (same input → same SVG) and safe output paths
 - Noise reduction (generated SVG/bundle/dependency trees)
 
 Recommended local loop:
@@ -121,6 +121,7 @@ coderabbit --prompt-only -t uncommitted 2>&1 | tee .coderabbit/last-prompt-only.
 ```
 
 Triage policy:
+
 - Blocking: contract breaks, path traversal risk, invariant regressions, secret leaks
 - Should-fix: docs/workflow drift, weak failure behavior
 - Nit/style: defer unless explicitly promoted
@@ -138,6 +139,7 @@ to `error` only when all conditions are satisfied:
 3. The remediation path is clear and documented in README and/or code comments.
 
 Current governance setting:
+
 - `reviews.pre_merge_checks.override_requested_reviewers_only: true`
 
 ## Releasing the action

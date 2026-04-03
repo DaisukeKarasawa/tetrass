@@ -3,6 +3,33 @@ import { constants as fsConstants, existsSync, realpathSync } from "node:fs";
 import { lstat, mkdir, open, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
+// src/domain/grass.ts
+var GRID_WEEKDAYS = 7;
+var GRID_VISIBLE_WEEKS = 53;
+var GROUP_COLUMN_COUNTS = [6, 6, 6, 6, 6, 6, 6, 6, 5];
+function assertGroupColumnCounts() {
+  const s = GROUP_COLUMN_COUNTS.reduce((a, b) => a + b, 0);
+  if (s !== GRID_VISIBLE_WEEKS) {
+    throw new Error(`GROUP_COLUMN_COUNTS must sum to ${GRID_VISIBLE_WEEKS}, got ${s}`);
+  }
+}
+function groupColumnRanges() {
+  assertGroupColumnCounts();
+  const out = [];
+  let x = 0;
+  for (const w of GROUP_COLUMN_COUNTS) {
+    out.push({ xStart: x, xEndInclusive: x + w - 1 });
+    x += w;
+  }
+  return out;
+}
+function createEmptyLevelBoard() {
+  return Array.from(
+    { length: GRID_WEEKDAYS },
+    () => Array.from({ length: GRID_VISIBLE_WEEKS }, () => 0)
+  );
+}
+
 // src/io/contributions.ts
 var MAX_HTTP_ERROR_BODY_CHARS = 500;
 var GITHUB_GRAPHQL_FETCH_TIMEOUT_MS = 3e4;
@@ -24,6 +51,7 @@ query($login: String!) {
             date
             weekday
             contributionCount
+            contributionLevel
           }
         }
       }
@@ -60,578 +88,203 @@ async function fetchContributionCalendar(login, token) {
     return cal;
   } catch (e) {
     if (isAbortLike(e)) {
-      throw new Error(
-        `GitHub GraphQL request timed out after ${GITHUB_GRAPHQL_FETCH_TIMEOUT_MS}ms`
-      );
+      throw new Error(`GitHub GraphQL request timed out after ${GITHUB_GRAPHQL_FETCH_TIMEOUT_MS}ms`);
     }
     throw e;
   } finally {
     clearTimeout(timeoutId);
   }
 }
-function flattenContributionDays(cal) {
-  const days = [];
-  for (const w of cal.weeks) {
-    for (const d of w.contributionDays) days.push(d);
+function chunkDaysIntoWeeks(days) {
+  const weeks = [];
+  for (let i = 0; i < days.length; i += GRID_WEEKDAYS) {
+    weeks.push({ contributionDays: days.slice(i, i + GRID_WEEKDAYS) });
   }
-  return days;
+  return { weeks };
 }
-var GITHUB_WEEKDAYS = 7;
-var GITHUB_VISIBLE_WEEKS = 53;
 var SAMPLE_CONTRIBUTION_DAY_COUNT = 400;
 function inferredWeekdayAt(day) {
   if (day.weekday != null) return day.weekday;
-  const dow = (/* @__PURE__ */ new Date(`${day.date}T00:00:00Z`)).getUTCDay();
-  return dow;
+  return (/* @__PURE__ */ new Date(`${day.date}T00:00:00Z`)).getUTCDay();
 }
-function contributionDaysToTargetBoard(days) {
-  if (days.length === 0) {
-    return Array.from(
-      { length: GITHUB_WEEKDAYS },
-      () => Array.from({ length: GITHUB_VISIBLE_WEEKS }, () => 0)
-    );
-  }
-  const totalWeeks = Math.ceil(days.length / GITHUB_WEEKDAYS);
-  const visibleWeeks = Math.min(GITHUB_VISIBLE_WEEKS, totalWeeks);
-  const startDayIdx = Math.max(0, (totalWeeks - visibleWeeks) * GITHUB_WEEKDAYS);
-  const visibleDays = days.slice(startDayIdx);
-  const width = GITHUB_VISIBLE_WEEKS;
-  const xOffset = GITHUB_VISIBLE_WEEKS - visibleWeeks;
-  const board = Array.from(
-    { length: GITHUB_WEEKDAYS },
-    () => Array.from({ length: width }, () => 0)
-  );
-  for (let i = 0; i < visibleDays.length; i++) {
-    const day = visibleDays[i];
-    const x = xOffset + Math.floor(i / GITHUB_WEEKDAYS);
-    const y = inferredWeekdayAt(day);
-    if (x >= 0 && x < width && y >= 0 && y < GITHUB_WEEKDAYS) {
-      board[y][x] = day.contributionCount > 0 ? 1 : 0;
+function contributionLevelToGrassLevel(level) {
+  switch (level) {
+    case "NONE":
+      return 0;
+    case "FIRST_QUARTILE":
+      return 1;
+    case "SECOND_QUARTILE":
+      return 2;
+    case "THIRD_QUARTILE":
+      return 3;
+    case "FOURTH_QUARTILE":
+      return 4;
+    default: {
+      const _exhaustive = level;
+      return _exhaustive;
     }
   }
-  return board;
+}
+function contributionCalendarToLevelBoard(cal) {
+  const emptyMeta = (date) => ({ date, contributionCount: 0 });
+  if (cal.weeks.length === 0) {
+    const board2 = createEmptyLevelBoard();
+    const meta2 = Array.from(
+      { length: GRID_WEEKDAYS },
+      (_, y) => Array.from({ length: GRID_VISIBLE_WEEKS }, (_2, x) => emptyMeta(`empty-${y}-${x}`))
+    );
+    return { board: board2, meta: meta2 };
+  }
+  const totalWeeks = cal.weeks.length;
+  const visibleWeeks = Math.min(GRID_VISIBLE_WEEKS, totalWeeks);
+  const startWeekIdx = Math.max(0, totalWeeks - visibleWeeks);
+  const xOffset = GRID_VISIBLE_WEEKS - visibleWeeks;
+  const board = createEmptyLevelBoard();
+  const meta = Array.from(
+    { length: GRID_WEEKDAYS },
+    (_, y) => Array.from({ length: GRID_VISIBLE_WEEKS }, (_2, x) => emptyMeta(`pad-${y}-${x}`))
+  );
+  for (let wi = startWeekIdx; wi < totalWeeks; wi++) {
+    const x = xOffset + (wi - startWeekIdx);
+    for (const day of cal.weeks[wi].contributionDays) {
+      const y = inferredWeekdayAt(day);
+      if (x >= 0 && x < GRID_VISIBLE_WEEKS && y >= 0 && y < GRID_WEEKDAYS) {
+        board[y][x] = contributionLevelToGrassLevel(day.contributionLevel);
+        meta[y][x] = { date: day.date, contributionCount: day.contributionCount };
+      }
+    }
+  }
+  return { board, meta };
+}
+async function fetchOrBuildContributionCalendar(opts) {
+  const { login, token, useSample, allowUnauthenticatedFallback = false } = opts;
+  if (useSample) {
+    console.warn("Using deterministic sample contributions (offline/sample mode).");
+    return chunkDaysIntoWeeks(buildSampleContributionDays());
+  }
+  try {
+    return await fetchContributionCalendar(login, token);
+  } catch (e) {
+    if (!token) {
+      if (allowUnauthenticatedFallback) {
+        console.warn(
+          "GitHub fetch failed without token; falling back to sample contributions (TETRASS_ALLOW_UNAUTH_FALLBACK=1)."
+        );
+        return chunkDaysIntoWeeks(buildSampleContributionDays());
+      }
+      throw new Error(
+        "GitHub fetch failed with no GITHUB_TOKEN. Set GITHUB_TOKEN for real contribution data, use TETRASS_USE_SAMPLE=1 (or TETRASS_OFFLINE=1) for offline sample mode, or set TETRASS_ALLOW_UNAUTH_FALLBACK=1 for CLI-only opt-in when an unauthenticated fetch fails."
+      );
+    }
+    throw new Error(`GitHub API request failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 function buildSampleContributionDays() {
   const days = [];
   const start = /* @__PURE__ */ new Date("2024-01-01T00:00:00Z");
-  const sampleWeeks = Math.ceil(SAMPLE_CONTRIBUTION_DAY_COUNT / GITHUB_WEEKDAYS);
-  const sampleGrassCell = (week, weekday) => {
+  const sampleWeeks = Math.ceil(SAMPLE_CONTRIBUTION_DAY_COUNT / GRID_WEEKDAYS);
+  const levelAt = (week, weekday, i) => {
     const last16Start = Math.max(0, sampleWeeks - 16);
-    return week >= last16Start && weekday >= 1 && weekday <= 5;
+    if (week < last16Start || weekday < 1 || weekday > 5) return "NONE";
+    const h = (i * 17 + week * 3 + weekday * 5) % 11;
+    if (h === 0) return "FIRST_QUARTILE";
+    if (h <= 3) return "SECOND_QUARTILE";
+    if (h <= 6) return "THIRD_QUARTILE";
+    return "FOURTH_QUARTILE";
   };
   for (let i = 0; i < SAMPLE_CONTRIBUTION_DAY_COUNT; i++) {
     const d = new Date(start);
     d.setUTCDate(start.getUTCDate() + i);
     const date = d.toISOString().slice(0, 10);
-    const week = Math.floor(i / GITHUB_WEEKDAYS);
+    const week = Math.floor(i / GRID_WEEKDAYS);
     const weekday = d.getUTCDay();
-    const contributionCount = sampleGrassCell(week, weekday) ? 1 : 0;
-    days.push({ date, weekday, contributionCount });
+    const contributionLevel = levelAt(week, weekday, i);
+    const contributionCount = contributionLevel === "NONE" ? 0 : (i * 13 + weekday) % 9 + 1;
+    days.push({ date, weekday, contributionCount, contributionLevel });
   }
   return days;
 }
 
-// src/domain/tetromino.ts
-var SHAPES = {
-  I: [
-    [[0, 1], [1, 1], [2, 1], [3, 1]],
-    [[2, 0], [2, 1], [2, 2], [2, 3]],
-    [[0, 2], [1, 2], [2, 2], [3, 2]],
-    [[1, 0], [1, 1], [1, 2], [1, 3]]
-  ],
-  O: [
-    [[0, 0], [1, 0], [0, 1], [1, 1]],
-    [[0, 0], [1, 0], [0, 1], [1, 1]],
-    [[0, 0], [1, 0], [0, 1], [1, 1]],
-    [[0, 0], [1, 0], [0, 1], [1, 1]]
-  ],
-  T: [
-    [[1, 0], [0, 1], [1, 1], [2, 1]],
-    [[1, 0], [1, 1], [2, 1], [1, 2]],
-    [[0, 1], [1, 1], [2, 1], [1, 2]],
-    [[1, 0], [0, 1], [1, 1], [1, 2]]
-  ],
-  S: [
-    [[1, 0], [2, 0], [0, 1], [1, 1]],
-    [[1, 0], [1, 1], [2, 1], [2, 2]],
-    [[1, 1], [2, 1], [0, 2], [1, 2]],
-    [[0, 0], [0, 1], [1, 1], [1, 2]]
-  ],
-  Z: [
-    [[0, 0], [1, 0], [1, 1], [2, 1]],
-    [[2, 0], [1, 1], [2, 1], [1, 2]],
-    [[0, 1], [1, 1], [1, 2], [2, 2]],
-    [[1, 0], [0, 1], [1, 1], [0, 2]]
-  ],
-  J: [
-    [[0, 0], [0, 1], [1, 1], [2, 1]],
-    [[1, 0], [2, 0], [1, 1], [1, 2]],
-    [[0, 1], [1, 1], [2, 1], [2, 2]],
-    [[1, 0], [1, 1], [0, 2], [1, 2]]
-  ],
-  L: [
-    [[2, 0], [0, 1], [1, 1], [2, 1]],
-    [[1, 0], [1, 1], [1, 2], [2, 2]],
-    [[0, 1], [1, 1], [2, 1], [0, 2]],
-    [[0, 0], [1, 0], [1, 1], [1, 2]]
-  ],
-  M: [
-    [[0, 0]],
-    [[0, 0]],
-    [[0, 0]],
-    [[0, 0]]
-  ]
-};
-var TYPE_ORDER = ["I", "O", "T", "S", "Z", "J", "L"];
-function getCells(type, rotation, x, y) {
-  const rot = rotation;
-  return SHAPES[type][rot].map(([dx, dy]) => [x + dx, y + dy]);
-}
-function iterateTypesInOrder() {
-  return [...TYPE_ORDER];
-}
-var ROTATIONS = [0, 1, 2, 3];
-
-// src/domain/types.ts
-var BOARD_WIDTH = 10;
-var BOARD_HEIGHT = 20;
-
-// src/domain/board.ts
-function createEmptyBoard(width = BOARD_WIDTH, height = BOARD_HEIGHT) {
-  return Array.from(
-    { length: height },
-    () => Array.from({ length: width }, () => 0)
-  );
-}
-function cloneBoard(board) {
-  return board.map((row) => [...row]);
-}
-function getBoardDimensions(board) {
-  const height = board.length;
-  const width = height > 0 ? board[0].length : 0;
-  return { width, height };
-}
-function boardKey(board) {
-  const { width, height } = getBoardDimensions(board);
-  let s = `${width}x${height}:`;
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      s += board[y][x] ? "1" : "0";
-    }
+// src/grass/groupDropPlanner.ts
+var DROP_DURATION_MS = 420;
+var HOLD_AFTER_LAST_MS = 1800;
+var FALL_OFFSET_CELLS = 14;
+function splitBoardIntoColumnGroups(board, meta) {
+  const ranges = groupColumnRanges();
+  if (board.length !== GRID_WEEKDAYS) {
+    throw new Error(`Expected board height ${GRID_WEEKDAYS}, got ${board.length}`);
   }
-  return s;
-}
-function boardsEqual(a, b) {
-  return boardKey(a) === boardKey(b);
-}
-function clearFullRows(board) {
-  const { width, height } = getBoardDimensions(board);
-  let cleared = 0;
-  const newRows = [];
-  for (let y = height - 1; y >= 0; y--) {
-    const full = board[y].every((c) => c === 1);
-    if (full) cleared++;
-    else newRows.push([...board[y]]);
+  const w = board[0]?.length ?? 0;
+  if (w !== GRID_VISIBLE_WEEKS) {
+    throw new Error(`Expected board width ${GRID_VISIBLE_WEEKS}, got ${w}`);
   }
-  while (newRows.length < height) {
-    newRows.push(Array.from({ length: width }, () => 0));
-  }
-  newRows.reverse();
-  for (let y = 0; y < height; y++) {
-    board[y] = newRows[y];
-  }
-  return cleared;
-}
-function lockCellsOverlapStack(board, cells) {
-  const { width, height } = getBoardDimensions(board);
-  for (const [cx, cy] of cells) {
-    if (cx < 0 || cx >= width || cy < 0 || cy >= height) {
-      return { ok: false, reason: "out_of_bounds" };
-    }
-    if (board[cy][cx] === 1) return { ok: false, reason: "overlap" };
-  }
-  return { ok: true };
-}
-function pieceCanMoveDownOnBoard(board, p) {
-  const { height } = getBoardDimensions(board);
-  const cells = getCells(p.type, p.rotation, p.x, p.y + 1);
-  for (const [cx, cy] of cells) {
-    if (cy >= height) return false;
-    if (cy < 0) continue;
-    if (board[cy][cx] === 1) return false;
-  }
-  return true;
-}
-function isValidLock(board, p) {
-  const cells = getCells(p.type, p.rotation, p.x, p.y);
-  if (!lockCellsOverlapStack(board, cells).ok) return false;
-  if (p.type === "M") return true;
-  return !pieceCanMoveDownOnBoard(board, p);
-}
-function applyPlacement(board, p) {
-  const { width, height } = getBoardDimensions(board);
-  const cells = getCells(p.type, p.rotation, p.x, p.y);
-  for (const [cx, cy] of cells) {
-    if (cx < 0 || cx >= width || cy < 0 || cy >= height) {
-      throw new Error(`Invalid placement out of bounds: (${cx}, ${cy})`);
-    }
-    board[cy][cx] = 1;
-  }
-  return { linesCleared: clearFullRows(board) };
-}
-function applyPlacementNoClear(board, p) {
-  const { width, height } = getBoardDimensions(board);
-  const cells = getCells(p.type, p.rotation, p.x, p.y);
-  for (const [cx, cy] of cells) {
-    if (cx < 0 || cx >= width || cy < 0 || cy >= height) {
-      throw new Error(`Invalid placement out of bounds: (${cx}, ${cy})`);
-    }
-    board[cy][cx] = 1;
-  }
-}
-
-// src/planner/diversityPad.ts
-function defaultEmbeddedPad(boardHeight) {
-  const yLow = boardHeight - 2;
-  const yHigh = boardHeight - 3;
-  return [
-    { placement: { type: "I", rotation: 0, x: 0, y: yLow } },
-    { placement: { type: "I", rotation: 0, x: 0, y: yHigh } },
-    { placement: { type: "I", rotation: 0, x: 5, y: yLow } },
-    { placement: { type: "J", rotation: 2, x: 7, y: yHigh } },
-    { placement: { type: "L", rotation: 2, x: 4, y: yHigh } }
-  ];
-}
-function planDiversityPadAfterIntro(boardWidth = 10, boardHeight = BOARD_HEIGHT) {
-  if (boardWidth === 10 && boardHeight === 20) {
-    return defaultEmbeddedPad(boardHeight).map((step) => ({ placement: { ...step.placement } }));
-  }
-  return [];
-}
-function assertDiversityPadValid(pad, boardWidth = 10, boardHeight = BOARD_HEIGHT) {
-  if (pad.length === 0) return;
-  let b = createEmptyBoard(boardWidth, boardHeight);
-  let clears = 0;
-  const nonO = /* @__PURE__ */ new Set();
-  for (const st of pad) {
-    if (!isValidLock(b, st.placement)) {
-      throw new Error(`Invalid pad lock: ${JSON.stringify(st.placement)}`);
-    }
-    clears += applyPlacement(b, st.placement).linesCleared;
-    if (st.placement.type !== "O") nonO.add(st.placement.type);
-  }
-  const emptyEnd = b.every((row) => row.every((c) => c === 0));
-  if (!emptyEnd) throw new Error("Diversity pad must end empty.");
-  if (clears < 1) throw new Error("Diversity pad must clear at least one line.");
-  if (nonO.size < 3) throw new Error("Diversity pad must use at least 3 non-O tetromino types.");
-}
-
-// src/planner/introClear.ts
-function planScriptedDoubleClearIntro(boardWidth = BOARD_WIDTH, boardHeight = BOARD_HEIGHT) {
-  if (boardWidth <= 0 || boardHeight <= 0) return [];
-  const y = boardHeight - 1;
-  const steps = [];
-  for (let x = 0; x < boardWidth; x++) {
-    steps.push({ placement: { type: "M", rotation: 0, x, y } });
-  }
-  if (boardHeight >= 2) {
-    const tetroY = boardHeight - 2;
-    let x = 0;
-    while (x + 3 < boardWidth) {
-      steps.push({ placement: { type: "I", rotation: 0, x, y: tetroY } });
-      x += 4;
-    }
-    for (; x < boardWidth; x++) {
-      steps.push({ placement: { type: "M", rotation: 0, x, y } });
-    }
-  }
-  return steps;
-}
-function assertIntroValid(intro, boardWidth = BOARD_WIDTH, boardHeight = BOARD_HEIGHT) {
-  const board = createEmptyBoard(boardWidth, boardHeight);
-  let totalClears = 0;
-  for (const st of intro) {
-    if (!isValidLock(board, st.placement)) {
-      throw new Error(`Invalid intro lock: ${JSON.stringify(st.placement)}`);
-    }
-    totalClears += applyPlacement(board, st.placement).linesCleared;
-  }
-  if (totalClears < 1) throw new Error("Intro must clear at least one line.");
-  const empty = board.every((row) => row.every((c) => c === 0));
-  if (!empty) throw new Error("Intro must end on an empty board.");
-}
-
-// src/planner/tetrominoTiling.ts
-var TYPE_ORDER2 = iterateTypesInOrder();
-var TILING_CANDIDATE_MIN_ORIGIN_Y = -4;
-var TILING_DFS_VISIT_BUDGET_BASE = 5e5;
-var TILING_DFS_VISIT_BUDGET_PER_GRASS_CELL = 15e3;
-var TILING_EXACT_COVER_MAX_GRASS_CELLS = 80;
-function normalizedShape(type, rotation) {
-  const raw = getCells(type, rotation, 0, 0);
-  let minX = Infinity;
-  let minY = Infinity;
-  for (const [x, y] of raw) {
-    minX = Math.min(minX, x);
-    minY = Math.min(minY, y);
-  }
-  return {
-    cells: raw.map(([x, y]) => [x - minX, y - minY]),
-    minX,
-    minY
-  };
-}
-function countDistinctTypes(steps) {
-  const used = /* @__PURE__ */ new Set();
-  for (const st of steps) used.add(st.placement.type);
-  return used.size;
-}
-function grassCells(board) {
-  const { width, height } = getBoardDimensions(board);
-  const out = [];
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      if (board[y][x]) out.push([x, y]);
-    }
-  }
-  return out;
-}
-function buildOptionsForTarget(target) {
-  const { width, height } = getBoardDimensions(target);
-  const grass = new Set(grassCells(target).map(([x, y]) => `${x},${y}`));
-  const options = /* @__PURE__ */ new Map();
-  for (const type of TYPE_ORDER2) {
-    for (const rotation of ROTATIONS) {
-      const { cells: rel, minX, minY } = normalizedShape(type, rotation);
-      for (let ax = 0; ax < width; ax++) {
-        for (let ay = TILING_CANDIDATE_MIN_ORIGIN_Y; ay < height; ay++) {
-          const abs = rel.map(([dx, dy]) => [ax + dx, ay + dy]);
-          let ok = true;
-          for (const [cx, cy] of abs) {
-            if (cx < 0 || cx >= width || cy < 0 || cy >= height) {
-              ok = false;
-              break;
-            }
-            if (!grass.has(`${cx},${cy}`)) {
-              ok = false;
-              break;
-            }
-          }
-          if (!ok) continue;
-          const p = { type, rotation, x: ax - minX, y: ay - minY };
-          for (const [cx, cy] of abs) {
-            const k = `${cx},${cy}`;
-            const arr = options.get(k) ?? [];
-            arr.push(p);
-            options.set(k, arr);
-          }
+  const groups = [];
+  for (let gi = 0; gi < ranges.length; gi++) {
+    const { xStart, xEndInclusive } = ranges[gi];
+    const cells = [];
+    for (let y = 0; y < GRID_WEEKDAYS; y++) {
+      for (let x = xStart; x <= xEndInclusive; x++) {
+        const level = board[y][x];
+        if (level === 0) continue;
+        const m = meta[y]?.[x];
+        if (!m) {
+          throw new Error(`Missing meta for grass cell at (${x},${y})`);
         }
+        cells.push({
+          x,
+          y,
+          level,
+          date: m.date,
+          contributionCount: m.contributionCount
+        });
       }
     }
-  }
-  return options;
-}
-function tryTile(target, minDistinctTypes) {
-  const { width, height } = getBoardDimensions(target);
-  const grass = grassCells(target);
-  if (grass.length === 0) return minDistinctTypes === 0 ? [] : null;
-  if (grass.length % 4 !== 0) return null;
-  const optionsByCell = buildOptionsForTarget(target);
-  const filled = /* @__PURE__ */ new Set();
-  const usedPlacements = [];
-  const typeUsed = /* @__PURE__ */ new Set();
-  const maxDfsVisits = TILING_DFS_VISIT_BUDGET_BASE + grass.length * TILING_DFS_VISIT_BUDGET_PER_GRASS_CELL;
-  let dfsVisitCount = 0;
-  function pickNextCell() {
-    for (const [x, y] of grass) {
-      if (!filled.has(`${x},${y}`)) return [x, y];
-    }
-    return null;
-  }
-  function dfs() {
-    if (dfsVisitCount >= maxDfsVisits) return false;
-    dfsVisitCount++;
-    const next = pickNextCell();
-    if (!next) {
-      if (typeUsed.size >= minDistinctTypes) return true;
-      return false;
-    }
-    const [nx, ny] = next;
-    const opts = optionsByCell.get(`${nx},${ny}`) ?? [];
-    const sorted = [...opts].sort((a, b) => {
-      const au = typeUsed.has(a.type) ? 1 : 0;
-      const bu = typeUsed.has(b.type) ? 1 : 0;
-      if (au !== bu) return au - bu;
-      const ai = TYPE_ORDER2.indexOf(a.type);
-      const bi = TYPE_ORDER2.indexOf(b.type);
-      if (ai !== bi) return ai - bi;
-      if (a.rotation !== b.rotation) return a.rotation - b.rotation;
-      if (a.x !== b.x) return a.x - b.x;
-      return a.y - b.y;
+    groups.push({
+      index: gi,
+      xStart,
+      xEndInclusive,
+      cells
     });
-    for (const p of sorted) {
-      const cells = getCells(p.type, p.rotation, p.x, p.y);
-      const keys = cells.map(([cx, cy]) => `${cx},${cy}`);
-      if (keys.some((k) => filled.has(k))) continue;
-      let allGrass = true;
-      for (const [cx, cy] of cells) {
-        if (cx < 0 || cx >= width || cy < 0 || cy >= height || !target[cy][cx]) {
-          allGrass = false;
-          break;
-        }
-      }
-      if (!allGrass) continue;
-      for (const k of keys) filled.add(k);
-      usedPlacements.push(p);
-      const addedType = !typeUsed.has(p.type);
-      if (addedType) typeUsed.add(p.type);
-      if (dfs()) return true;
-      if (addedType) typeUsed.delete(p.type);
-      usedPlacements.pop();
-      for (const k of keys) filled.delete(k);
-    }
-    return false;
   }
-  if (!dfs()) return null;
-  const ordered = [...usedPlacements].sort((a, b) => {
-    if (a.y !== b.y) return b.y - a.y;
-    if (a.x !== b.x) return a.x - b.x;
-    const ai = TYPE_ORDER2.indexOf(a.type);
-    const bi = TYPE_ORDER2.indexOf(b.type);
-    if (ai !== bi) return ai - bi;
-    return a.rotation - b.rotation;
-  });
-  const board = createEmptyBoard(width, height);
-  for (const p of ordered) {
-    if (!isValidLock(board, p)) return null;
-    applyPlacementNoClear(board, p);
-  }
-  if (!boardsEqual(board, target)) {
-    return null;
-  }
-  return ordered.map((placement) => ({ placement, noLineClear: true }));
+  return groups;
 }
-function buildMonominoSteps(positions) {
-  return positions.map(([x, y]) => ({
-    placement: { type: "M", rotation: 0, x, y },
-    noLineClear: true
-  }));
+function buildDropSchedule(groups) {
+  let t = 0;
+  const segments = [];
+  for (const g of groups) {
+    segments.push({
+      groupIndex: g.index,
+      startMs: t,
+      dropDurationMs: DROP_DURATION_MS,
+      fallOffsetCells: FALL_OFFSET_CELLS,
+      cells: g.cells
+    });
+    t += DROP_DURATION_MS;
+  }
+  return segments;
 }
-function mergeAndValidate(target, tetrominoSteps, monoSteps) {
-  const { width, height } = getBoardDimensions(target);
-  const allSteps = [...tetrominoSteps, ...monoSteps];
-  allSteps.sort((a, b) => {
-    const aCells = getCells(a.placement.type, a.placement.rotation, a.placement.x, a.placement.y);
-    const bCells = getCells(b.placement.type, b.placement.rotation, b.placement.x, b.placement.y);
-    const aMaxY = Math.max(...aCells.map(([, cy]) => cy));
-    const bMaxY = Math.max(...bCells.map(([, cy]) => cy));
-    if (aMaxY !== bMaxY) return bMaxY - aMaxY;
-    if (a.placement.x !== b.placement.x) return a.placement.x - b.placement.x;
-    return 0;
-  });
-  const board = createEmptyBoard(width, height);
-  for (const step of allSteps) {
-    if (!isValidLock(board, step.placement)) return null;
-    applyPlacementNoClear(board, step.placement);
-  }
-  if (!boardsEqual(board, target)) return null;
-  return allSteps;
-}
-function tileTargetWithTrimming(target, minDistinctTypes) {
-  const allGrass = grassCells(target);
-  if (allGrass.length === 0) {
-    return { steps: [], trimmedBoard: cloneBoard(target), trimmedCells: 0 };
-  }
-  const width = target[0]?.length ?? 0;
-  const height = target.length;
-  const boardCanUseExactCover = width >= 8 || height >= 8;
-  const mayUseExactCover = boardCanUseExactCover && allGrass.length <= TILING_EXACT_COVER_MAX_GRASS_CELLS;
-  if (mayUseExactCover && allGrass.length % 4 === 0) {
-    const steps = tryTile(target, minDistinctTypes);
-    if (steps) {
-      return { steps, trimmedBoard: cloneBoard(target), trimmedCells: 0 };
-    }
-  }
-  const reduced = cloneBoard(target);
-  const removedCells = [];
-  for (let i = 0; i < allGrass.length; i++) {
-    const currentGrass = grassCells(reduced);
-    if (currentGrass.length === 0) break;
-    currentGrass.sort((a, b) => a[1] !== b[1] ? a[1] - b[1] : a[0] - b[0]);
-    const [rx, ry] = currentGrass[0];
-    reduced[ry][rx] = 0;
-    removedCells.push([rx, ry]);
-    const remCount = grassCells(reduced).length;
-    if (remCount === 0) break;
-    if (remCount % 4 !== 0) continue;
-    if (!boardCanUseExactCover || remCount > TILING_EXACT_COVER_MAX_GRASS_CELLS) continue;
-    const tetrominoSteps = tryTile(reduced, 0);
-    if (!tetrominoSteps || tetrominoSteps.length === 0) continue;
-    const monoSteps = buildMonominoSteps(removedCells);
-    const merged = mergeAndValidate(target, tetrominoSteps, monoSteps);
-    if (merged) {
-      if (countDistinctTypes(merged) < minDistinctTypes) continue;
-      return { steps: merged, trimmedBoard: cloneBoard(target), trimmedCells: 0 };
-    }
-  }
-  const allMonoSteps = buildMonominoSteps(allGrass);
-  allMonoSteps.sort((a, b) => {
-    if (a.placement.y !== b.placement.y) return b.placement.y - a.placement.y;
-    return a.placement.x - b.placement.x;
-  });
-  const monoTypeCount = countDistinctTypes(allMonoSteps);
-  if (monoTypeCount < minDistinctTypes) {
-    throw new Error(
-      `Could not tile target with required piece diversity: need >=${minDistinctTypes} types, got ${monoTypeCount}.`
-    );
-  }
-  const board = createEmptyBoard(width, height);
-  for (const step of allMonoSteps) {
-    if (!isValidLock(board, step.placement)) {
-      throw new Error("Internal error: monomino lock validation failed.");
-    }
-    applyPlacementNoClear(board, step.placement);
-  }
-  if (!boardsEqual(board, target)) {
-    throw new Error("Internal error: all-monomino fallback did not reproduce target.");
-  }
-  return { steps: allMonoSteps, trimmedBoard: cloneBoard(target), trimmedCells: 0 };
-}
-
-// src/planner/deterministicPlanner.ts
-function countDistinctTypes2(steps) {
-  const s = /* @__PURE__ */ new Set();
-  for (const st of steps) s.add(st.placement.type);
-  return s.size;
-}
-function planDeterministicReplay(target) {
-  const { width, height } = getBoardDimensions(target);
-  const intro = planScriptedDoubleClearIntro(width, height);
-  const introTypeCount = countDistinctTypes2(intro);
-  assertIntroValid(intro, width, height);
-  const pad = planDiversityPadAfterIntro(width, height);
-  assertDiversityPadValid(pad, width, height);
-  const minDistinctTypes = width >= 10 && height >= 20 ? 4 : 2;
-  const minDistinctTypesFromMain = Math.max(0, minDistinctTypes - introTypeCount);
-  const { steps: mainSteps, trimmedBoard } = tileTargetWithTrimming(target, minDistinctTypesFromMain);
-  const all = [...intro, ...pad, ...mainSteps];
-  if (countDistinctTypes2(all) < minDistinctTypes) {
-    throw new Error(`Shape diversity failed: only ${countDistinctTypes2(all)} types in full replay.`);
-  }
-  const script = { steps: all, boardWidth: width, boardHeight: height };
-  return { script, grassTarget: trimmedBoard };
+function totalCycleMs(segments) {
+  if (segments.length === 0) return HOLD_AFTER_LAST_MS;
+  const last = segments[segments.length - 1];
+  return last.startMs + last.dropDurationMs + HOLD_AFTER_LAST_MS;
 }
 
 // src/renderer/svgRenderer.ts
 var PALETTE_LIGHT = {
-  empty: "#ebedf0",
-  grass: "#216e39",
-  ghost: "#9be9a8"
+  canvas: "#ffffff",
+  emptyCell: "#ebedf0",
+  level1: "#9be9a8",
+  level2: "#40c463",
+  level3: "#30a14e",
+  level4: "#216e39"
 };
 var PALETTE_DARK = {
-  empty: "#161b22",
-  grass: "#39d353",
-  ghost: "#0e4429"
+  canvas: "#0d1117",
+  emptyCell: "#161b22",
+  level1: "#0e4429",
+  level2: "#006d32",
+  level3: "#26a641",
+  level4: "#39d353"
 };
 var DEFAULT_SAFE_COLOR = "#ebedf0";
 var CSS_NAMED_COLORS = new Set(
@@ -703,294 +356,138 @@ function validateColor(value) {
   }
   return DEFAULT_SAFE_COLOR;
 }
-function sanitizePalette(p) {
+function sanitizeGrassPalette(p) {
   return {
-    empty: validateColor(p.empty),
-    grass: validateColor(p.grass),
-    ghost: validateColor(p.ghost)
+    canvas: validateColor(p.canvas),
+    emptyCell: validateColor(p.emptyCell),
+    level1: validateColor(p.level1),
+    level2: validateColor(p.level2),
+    level3: validateColor(p.level3),
+    level4: validateColor(p.level4)
   };
 }
-var CELL = 18;
+var cellSize = 18;
+var step = 20;
 var PAD = 2;
-var SVG_FRAME_DURATION_MS = 80;
-var SVG_HOLD_LAST_FRAME_MS = 1500;
+var RX = 2;
+var CYCLE_TAIL_RESET = 12e-4;
+var SMIL_KEY_GAP = 2e-6;
+function clampSmilKeyframeFractions(startMs, dropDurationMs, cycleMs) {
+  const cycle = Math.max(1, cycleMs);
+  const g = SMIL_KEY_GAP;
+  const rTail = Math.max(0, 1 - CYCLE_TAIL_RESET);
+  const bRaw = (startMs + dropDurationMs) / cycle;
+  const aRaw = startMs / cycle;
+  if (aRaw <= Number.EPSILON) {
+    let b2 = Math.min(bRaw, rTail - g);
+    b2 = Math.max(b2, g);
+    let r2 = Math.max(rTail, b2 + g);
+    r2 = Math.min(r2, 1 - g);
+    return { mode: "zero", b: b2, r: r2 };
+  }
+  let a = Math.min(aRaw, rTail - 3 * g);
+  a = Math.max(a, g);
+  let b = Math.min(bRaw, rTail - g);
+  b = Math.max(b, a + g);
+  let r = Math.max(rTail, b + g);
+  r = Math.min(r, 1 - g);
+  if (!(a < b && b < r)) {
+    a = g;
+    b = 3 * g;
+    r = 1 - g;
+  }
+  return { mode: "off", a, b, r };
+}
+function cellPx(x, y) {
+  return { px: PAD + x * step, py: PAD + y * step };
+}
 function cellUse(x, y, href) {
-  const px = PAD + x * CELL;
-  const py = PAD + y * CELL;
+  const { px, py } = cellPx(x, y);
   return `<use href="#${href}" x="${px}" y="${py}"/>`;
 }
-function getFrameBoardDimensions(frames) {
-  const first = frames[0];
-  if (!first) return { width: BOARD_WIDTH, height: BOARD_HEIGHT };
-  const { width, height } = getBoardDimensions(first.board);
-  return {
-    width: width || BOARD_WIDTH,
-    height: height || BOARD_HEIGHT
-  };
-}
-function buildSymbols(palette) {
-  const { empty: e, grass: g, ghost: h } = palette;
+function buildSymbols(p) {
+  const { emptyCell: e, level1: l1, level2: l2, level3: l3, level4: l4 } = p;
+  const sym = (id, fill) => `<symbol id="${id}" viewBox="0 0 ${cellSize} ${cellSize}"><rect width="${cellSize}" height="${cellSize}" fill="${fill}" rx="${RX}"/></symbol>`;
   return `<defs>
-<symbol id="cE" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${e}" rx="2"/></symbol>
-<symbol id="cG" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${g}" rx="2"/></symbol>
-<symbol id="cH" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${h}" rx="2"/></symbol>
+${sym("cE", e)}
+${sym("cG1", l1)}
+${sym("cG2", l2)}
+${sym("cG3", l3)}
+${sym("cG4", l4)}
 </defs>`;
 }
-function renderActiveUses(active, width, height) {
-  if (!active) return "";
-  const cells = getCells(active.type, active.rotation, active.x, active.y);
+function levelHref(level) {
+  return `cG${level}`;
+}
+function smilDropTimeline(startMs, dropDurationMs, cycleMs, fallPx) {
+  const k = clampSmilKeyframeFractions(startMs, dropDurationMs, cycleMs);
+  const fmt = (t) => t.toFixed(6);
+  if (k.mode === "zero") {
+    return {
+      keyTimes: `0;${fmt(k.b)};${fmt(k.r)};1`,
+      translateValues: `0,-${fallPx};0,0;0,0;0,-${fallPx}`,
+      opValues: `1;1;0;0`
+    };
+  }
+  return {
+    keyTimes: `0;${fmt(k.a)};${fmt(k.b)};${fmt(k.r)};1`,
+    translateValues: `0,-${fallPx};0,-${fallPx};0,0;0,0;0,-${fallPx}`,
+    opValues: `0;1;1;0;0`
+  };
+}
+function renderEmptyGrid() {
   let s = "";
-  const safeWidth = Math.max(width, 0);
-  const safeHeight = Math.max(height, 0);
-  for (const [cx, cy] of cells) {
-    if (cy >= 0 && cy < safeHeight && cx >= 0 && cx < safeWidth) {
-      s += cellUse(cx, cy, "cH");
+  for (let y = 0; y < GRID_WEEKDAYS; y++) {
+    for (let x = 0; x < GRID_VISIBLE_WEEKS; x++) {
+      s += cellUse(x, y, "cE");
     }
   }
   return s;
 }
-function toKeyTime(frameIdx, frameDurMs, cycleMs) {
-  return (frameIdx * frameDurMs / cycleMs).toFixed(6);
-}
-function renderBaseEmptyGrid(width, height) {
-  let s = "";
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) s += cellUse(x, y, "cE");
+function renderGroupDrop(seg, cycleMs) {
+  const fallPx = seg.fallOffsetCells * step;
+  const { startMs, dropDurationMs } = seg;
+  const { keyTimes, translateValues, opValues } = smilDropTimeline(startMs, dropDurationMs, cycleMs, fallPx);
+  const inner = seg.cells.map((c) => {
+    const href = levelHref(c.level);
+    return cellUse(c.x, c.y, href);
+  }).join("\n");
+  if (!inner) {
+    return "";
   }
-  return s;
-}
-function renderBoardCellAnimations(frames, width, height, frameDurMs, cycleMs) {
-  const n = frames.length;
-  let out = "";
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const states = [];
-      for (let i = 0; i < n; i++) states.push(frames[i].board[y][x] ? 1 : 0);
-      const values = [];
-      const keyTimes = [];
-      let prev = states[0] ?? 0;
-      values.push(String(prev));
-      keyTimes.push("0");
-      for (let i = 1; i < n; i++) {
-        const cur = states[i];
-        if (cur === prev) continue;
-        keyTimes.push(toKeyTime(i, frameDurMs, cycleMs));
-        values.push(String(cur));
-        prev = cur;
-      }
-      keyTimes.push("1");
-      values.push(String(prev));
-      if (!values.some((v) => v === "1")) continue;
-      const px = PAD + x * CELL;
-      const py = PAD + y * CELL;
-      out += `<use href="#cG" x="${px}" y="${py}" opacity="${states[0] ? 1 : 0}">
-<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes.join(";")}" values="${values.join(";")}"/>
-</use>`;
-    }
-  }
-  return out;
-}
-function renderActiveGroups(frames, width, height, frameDurMs, cycleMs) {
-  const n = frames.length;
-  const groups = [];
-  for (let i = 0; i < n; i++) {
-    const inner = renderActiveUses(frames[i].active, width, height);
-    if (!inner) continue;
-    if (i < n - 1) {
-      const start = toKeyTime(i, frameDurMs, cycleMs);
-      const end = toKeyTime(i + 1, frameDurMs, cycleMs);
-      groups.push(`<g opacity="0">
+  return `<g>
+<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes}" values="${opValues}"/>
+<g>
+<animateTransform attributeName="transform" type="translate" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="linear" keyTimes="${keyTimes}" values="${translateValues}"/>
 ${inner}
-<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="0;${start};${end};1" values="0;1;0;0"/>
-</g>`);
-    } else {
-      const start = toKeyTime(i, frameDurMs, cycleMs);
-      groups.push(`<g opacity="0">
-${inner}
-<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="0;${start};1" values="0;1;1"/>
-</g>`);
-    }
-  }
-  return groups.join("\n");
+</g>
+</g>`;
 }
-function buildAnimatedSvg(frames, palette) {
-  if (frames.length === 0) throw new Error("No frames to render");
-  const safePalette = sanitizePalette(palette);
-  const { width: boardWidth, height: boardHeight } = getFrameBoardDimensions(frames);
-  const W = boardWidth * CELL + PAD * 2;
-  const H = boardHeight * CELL + PAD * 2;
-  const frameDurMs = SVG_FRAME_DURATION_MS;
-  const holdLastMs = SVG_HOLD_LAST_FRAME_MS;
-  const n = frames.length;
-  const cycleMs = n * frameDurMs + holdLastMs;
-  const emptyGrid = renderBaseEmptyGrid(boardWidth, boardHeight);
-  const boardAnim = renderBoardCellAnimations(frames, boardWidth, boardHeight, frameDurMs, cycleMs);
-  const activeAnim = renderActiveGroups(frames, boardWidth, boardHeight, frameDurMs, cycleMs);
+function buildGrassDropSvg(segments, palette) {
+  if (segments.length === 0) throw new Error("No drop segments");
+  const safe = sanitizeGrassPalette(palette);
+  const cycleMs = totalCycleMs(segments);
+  const boardW = GRID_VISIBLE_WEEKS * step + PAD * 2;
+  const boardH = GRID_WEEKDAYS * step + PAD * 2;
+  const drops = segments.map((s) => renderGroupDrop(s, cycleMs)).filter((x) => x.length > 0).join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Tetrass contribution animation">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${boardW}" height="${boardH}" viewBox="0 0 ${boardW} ${boardH}" role="img" aria-label="Contribution graph animation">
 <title>Tetrass</title>
-${buildSymbols(safePalette)}
-<rect width="100%" height="100%" fill="${safePalette.empty}"/>
-${emptyGrid}
-${boardAnim}
-${activeAnim}
+${buildSymbols(safe)}
+<rect width="100%" height="100%" fill="${safe.canvas}"/>
+<g id="emptyCells">
+${renderEmptyGrid()}
+</g>
+<!-- grassDrops: animated non-zero cells only. All-zero boards keep this group empty (stable id for DOM/tests). -->
+<g id="grassDrops">
+${drops}
+</g>
 </svg>`;
-}
-
-// src/simulator/simulateReplay.ts
-var SPAWN_ROWS_ABOVE_LOCK = 24;
-var MAX_SOFT_DROP_SAMPLE_STEPS = 8;
-function placementFits(board, cells) {
-  const height = board.length;
-  const width = height > 0 ? board[0].length : 0;
-  for (const [cx, cy] of cells) {
-    if (cx < 0 || cx >= width) return false;
-    if (cy >= height) return false;
-    if (cy >= 0 && board[cy][cx] === 1) return false;
-  }
-  return true;
-}
-function spawnAboveLock(p) {
-  return { ...p, y: p.y - SPAWN_ROWS_ABOVE_LOCK };
-}
-function dropStride(dropRows) {
-  if (dropRows <= 0) return 1;
-  return Math.max(1, Math.ceil(dropRows / MAX_SOFT_DROP_SAMPLE_STEPS));
-}
-function appendPreLockDropFrames(frames, board, lock) {
-  let current = spawnAboveLock(lock);
-  const targetY = lock.y;
-  const stride = dropStride(targetY - current.y);
-  const verticalPath = [current];
-  while (current.y < targetY) {
-    const nextY = Math.min(targetY, current.y + stride);
-    const next = { ...current, y: nextY };
-    const cells = getCells(next.type, next.rotation, next.x, next.y);
-    if (!placementFits(board, cells)) break;
-    current = next;
-    if (current.y < targetY) {
-      verticalPath.push(current);
-    }
-  }
-  while (current.y < targetY) {
-    const next = { ...current, y: current.y + 1 };
-    const cells = getCells(next.type, next.rotation, next.x, next.y);
-    if (!placementFits(board, cells)) break;
-    current = next;
-  }
-  const verticalReachesLock = current.x === lock.x && current.y === lock.y && current.rotation === lock.rotation;
-  if (verticalReachesLock) {
-    verticalPath.push(current);
-    for (const p of verticalPath) {
-      frames.push({ board: cloneBoard(board), active: p, linesClearedThisLock: 0 });
-    }
-  } else {
-    frames.push({
-      board: cloneBoard(board),
-      active: spawnAboveLock(lock),
-      linesClearedThisLock: 0
-    });
-    frames.push({ board: cloneBoard(board), active: lock, linesClearedThisLock: 0 });
-  }
-}
-function simulateReplayForFrames(script) {
-  const board = createEmptyBoard(script.boardWidth ?? BOARD_WIDTH, script.boardHeight ?? BOARD_HEIGHT);
-  const frames = [];
-  let totalLineClears = 0;
-  const usedTypes = /* @__PURE__ */ new Set();
-  frames.push({ board: cloneBoard(board), active: null, linesClearedThisLock: 0 });
-  for (const step of script.steps) {
-    const lock = step.placement;
-    usedTypes.add(lock.type);
-    if (!isValidLock(board, lock)) {
-      throw new Error(`Invalid lock placement: ${JSON.stringify(lock)}`);
-    }
-    appendPreLockDropFrames(frames, board, lock);
-    let linesCleared = 0;
-    if (step.noLineClear) {
-      applyPlacementNoClear(board, lock);
-    } else {
-      linesCleared = applyPlacement(board, lock).linesCleared;
-      totalLineClears += linesCleared;
-    }
-    frames.push({
-      board: cloneBoard(board),
-      active: null,
-      linesClearedThisLock: linesCleared
-    });
-  }
-  return { frames, finalBoard: board, totalLineClears, usedTypes };
-}
-function simulateReplayFast(script) {
-  const board = createEmptyBoard(script.boardWidth ?? BOARD_WIDTH, script.boardHeight ?? BOARD_HEIGHT);
-  let totalLineClears = 0;
-  const usedTypes = /* @__PURE__ */ new Set();
-  for (const step of script.steps) {
-    usedTypes.add(step.placement.type);
-    if (!isValidLock(board, step.placement)) {
-      throw new Error(`Invalid lock placement: ${JSON.stringify(step.placement)}`);
-    }
-    if (step.noLineClear) {
-      applyPlacementNoClear(board, step.placement);
-    } else {
-      totalLineClears += applyPlacement(board, step.placement).linesCleared;
-    }
-  }
-  return { frames: [], finalBoard: board, totalLineClears, usedTypes };
-}
-
-// src/verify/finalBoardMatcher.ts
-function assertFinalMatchesTarget(finalBoard, target) {
-  if (!boardsEqual(finalBoard, target)) {
-    throw new Error("Final board does not match target grass board.");
-  }
 }
 
 // src/generateRunner.ts
 function paletteFor(kind) {
   return kind === "dark" ? PALETTE_DARK : PALETTE_LIGHT;
-}
-async function fetchOrBuildContributionDays(opts) {
-  const { login, token, useSample, allowUnauthenticatedFallback = false } = opts;
-  if (useSample) {
-    console.warn("Using deterministic sample contributions (offline/sample mode).");
-    return buildSampleContributionDays();
-  }
-  try {
-    const cal = await fetchContributionCalendar(login, token);
-    return flattenContributionDays(cal);
-  } catch (e) {
-    if (!token) {
-      if (allowUnauthenticatedFallback) {
-        console.warn(
-          "GitHub fetch failed without token; falling back to sample contributions (TETRASS_ALLOW_UNAUTH_FALLBACK=1)."
-        );
-        return buildSampleContributionDays();
-      }
-      throw new Error(
-        "GitHub fetch failed with no GITHUB_TOKEN. Set GITHUB_TOKEN for real contribution data, use TETRASS_USE_SAMPLE=1 (or TETRASS_OFFLINE=1) for offline sample mode, or set TETRASS_ALLOW_UNAUTH_FALLBACK=1 for CLI-only opt-in when an unauthenticated fetch fails."
-      );
-    }
-    throw new Error(`GitHub API request failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
-function planAndVerifyReplay(days) {
-  const target = contributionDaysToTargetBoard(days);
-  const { script, grassTarget } = planDeterministicReplay(target);
-  const fast = simulateReplayFast(script);
-  assertFinalMatchesTarget(fast.finalBoard, grassTarget);
-  if (fast.totalLineClears < 1) {
-    throw new Error("Acceptance failed: no line clears in replay.");
-  }
-  const boardHeight = script.boardHeight ?? grassTarget.length;
-  const boardWidth = script.boardWidth ?? (grassTarget[0]?.length ?? 0);
-  const minDistinctTypes = boardWidth >= 10 && boardHeight >= 20 ? 4 : 2;
-  if (fast.usedTypes.size < minDistinctTypes) {
-    throw new Error(
-      `Acceptance failed: need >=${minDistinctTypes} piece types, got ${fast.usedTypes.size}`
-    );
-  }
-  return { script, grassTarget, fast };
 }
 function resolveWorkspaceRoots(workspaceRoot) {
   const workspaceRootResolved = workspaceRoot ? resolve(workspaceRoot) : null;
@@ -1004,19 +501,16 @@ function resolveWorkspaceRoots(workspaceRoot) {
   }
   return { workspaceRootResolved, workspaceRootCanonical };
 }
-async function renderAndWriteReplayOutputs(opts) {
-  const { script, fast, outputs, workspaceRootCanonical } = opts;
-  const { frames } = simulateReplayForFrames(script);
-  const svgByPalette = /* @__PURE__ */ new Map();
+async function renderAndWriteGrassOutputs(opts) {
+  const { svgByPalette, outputs, workspaceRootCanonical } = opts;
   for (const out of outputs) {
     let filePath = out.filePath;
     if (workspaceRootCanonical) {
       assertPathInsideRoot(filePath, workspaceRootCanonical, { requireProperDescendant: true });
     }
-    let svg = svgByPalette.get(out.palette);
+    const svg = svgByPalette.get(out.palette);
     if (!svg) {
-      svg = buildAnimatedSvg(frames, paletteFor(out.palette));
-      svgByPalette.set(out.palette, svg);
+      throw new Error(`Missing SVG for palette '${out.palette}'`);
     }
     const dir = dirname(filePath);
     let writeTarget = filePath;
@@ -1042,20 +536,20 @@ async function renderAndWriteReplayOutputs(opts) {
       await writeFile(writeTarget, svg, "utf8");
     }
   }
-  console.log(
-    `Wrote ${outputs.length} file(s) (${frames.length} frames, ${script.steps.length} locks, ${fast.totalLineClears} line clears).`
-  );
+  console.log(`Wrote ${outputs.length} SVG file(s) (group-drop animation).`);
 }
 async function runTetrassGenerate(opts) {
   const { login, token, outputs, useSample, workspaceRoot, allowUnauthenticatedFallback } = opts;
   if (outputs.length === 0) throw new Error("At least one output path is required.");
-  const days = await fetchOrBuildContributionDays({
+  const cal = await fetchOrBuildContributionCalendar({
     login,
     token,
     useSample,
     allowUnauthenticatedFallback
   });
-  const { script, fast } = planAndVerifyReplay(days);
+  const { board, meta } = contributionCalendarToLevelBoard(cal);
+  const groups = splitBoardIntoColumnGroups(board, meta);
+  const segments = buildDropSchedule(groups);
   const { workspaceRootResolved, workspaceRootCanonical } = resolveWorkspaceRoots(workspaceRoot);
   const outputsForRender = workspaceRootResolved != null ? outputs.map((o) => ({
     ...o,
@@ -1068,11 +562,17 @@ async function runTetrassGenerate(opts) {
     }
     seenOutputPaths.add(filePath);
   }
-  await renderAndWriteReplayOutputs({
-    script,
-    fast,
+  const neededPalettes = new Set(outputsForRender.map((o) => o.palette));
+  const svgByPalette = /* @__PURE__ */ new Map();
+  if (neededPalettes.has("light")) {
+    svgByPalette.set("light", buildGrassDropSvg(segments, paletteFor("light")));
+  }
+  if (neededPalettes.has("dark")) {
+    svgByPalette.set("dark", buildGrassDropSvg(segments, paletteFor("dark")));
+  }
+  await renderAndWriteGrassOutputs({
+    svgByPalette,
     outputs: outputsForRender,
-    workspaceRootResolved,
     workspaceRootCanonical
   });
 }
@@ -1093,9 +593,7 @@ function parseOutputLines(raw, workspaceRoot) {
       const pal = params.get("palette");
       if (pal === "github-dark" || pal === "dark") palette = "dark";
       else if (pal && pal !== "light") {
-        console.warn(
-          `Unrecognized palette '${pal}' for output '${filePart}'; defaulting to light.`
-        );
+        console.warn(`Unrecognized palette '${pal}' for output '${filePart}'; defaulting to light.`);
       }
     }
     if (!filePart) {
@@ -1136,9 +634,9 @@ function canonicalizeOutputPathUnderWorkspace(lexicalAbs, workspaceResolved) {
   const parts = rel.split(sep).filter((p) => p.length > 0);
   let cur = rootCanon;
   for (let i = 0; i < parts.length; i++) {
-    const step = join(cur, parts[i]);
-    if (existsSync(step)) {
-      cur = realpathSync(step);
+    const step2 = join(cur, parts[i]);
+    if (existsSync(step2)) {
+      cur = realpathSync(step2);
       assertPathInsideRoot(cur, rootCanon);
     } else {
       cur = join(cur, ...parts.slice(i));

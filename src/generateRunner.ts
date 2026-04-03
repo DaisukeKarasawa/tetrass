@@ -2,23 +2,12 @@ import { constants as fsConstants, existsSync, realpathSync } from "node:fs";
 import { lstat, mkdir, open, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-import type { Board, ReplayScript } from "./domain/types.js";
 import {
-  buildSampleContributionDays,
-  contributionDaysToTargetBoard,
-  fetchContributionCalendar,
-  flattenContributionDays,
-  type ContributionDay,
+  contributionCalendarToLevelBoard,
+  fetchOrBuildContributionCalendar,
 } from "./io/contributions.js";
-import { planDeterministicReplay } from "./planner/deterministicPlanner.js";
-import { buildAnimatedSvg, PALETTE_DARK, PALETTE_LIGHT } from "./renderer/svgRenderer.js";
-import type { SvgPalette } from "./renderer/svgRenderer.js";
-import {
-  simulateReplayForFrames,
-  simulateReplayFast,
-  type SimulationResult,
-} from "./simulator/simulateReplay.js";
-import { assertFinalMatchesTarget } from "./verify/finalBoardMatcher.js";
+import { buildGrassDropSvg, PALETTE_DARK, PALETTE_LIGHT, type GrassPalette } from "./renderer/svgRenderer.js";
+import { buildDropSchedule, splitBoardIntoColumnGroups } from "./grass/groupDropPlanner.js";
 
 export type OutputPalette = "light" | "dark";
 
@@ -43,7 +32,7 @@ export interface GenerateOptions {
   workspaceRoot?: string;
 }
 
-function paletteFor(kind: OutputPalette): SvgPalette {
+function paletteFor(kind: OutputPalette): GrassPalette {
   return kind === "dark" ? PALETTE_DARK : PALETTE_LIGHT;
 }
 
@@ -51,61 +40,6 @@ type FetchContributionOpts = Pick<
   GenerateOptions,
   "login" | "token" | "useSample" | "allowUnauthenticatedFallback"
 >;
-
-/**
- * Load contribution calendar days: GitHub API, or deterministic sample (offline / fallback).
- */
-export async function fetchOrBuildContributionDays(opts: FetchContributionOpts): Promise<ContributionDay[]> {
-  const { login, token, useSample, allowUnauthenticatedFallback = false } = opts;
-  if (useSample) {
-    console.warn("Using deterministic sample contributions (offline/sample mode).");
-    return buildSampleContributionDays();
-  }
-  try {
-    const cal = await fetchContributionCalendar(login, token);
-    return flattenContributionDays(cal);
-  } catch (e) {
-    if (!token) {
-      if (allowUnauthenticatedFallback) {
-        console.warn(
-          "GitHub fetch failed without token; falling back to sample contributions (TETRASS_ALLOW_UNAUTH_FALLBACK=1).",
-        );
-        return buildSampleContributionDays();
-      }
-      throw new Error(
-        "GitHub fetch failed with no GITHUB_TOKEN. Set GITHUB_TOKEN for real contribution data, use TETRASS_USE_SAMPLE=1 (or TETRASS_OFFLINE=1) for offline sample mode, or set TETRASS_ALLOW_UNAUTH_FALLBACK=1 for CLI-only opt-in when an unauthenticated fetch fails.",
-      );
-    }
-    throw new Error(`GitHub API request failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
-
-export interface PlannedVerifiedReplay {
-  script: ReplayScript;
-  grassTarget: Board;
-  fast: SimulationResult;
-}
-
-/** Map days → grass mask, plan replay, fast-simulate, and run acceptance checks. */
-export function planAndVerifyReplay(days: ContributionDay[]): PlannedVerifiedReplay {
-  const target = contributionDaysToTargetBoard(days);
-  const { script, grassTarget } = planDeterministicReplay(target);
-  const fast = simulateReplayFast(script);
-  assertFinalMatchesTarget(fast.finalBoard, grassTarget);
-  if (fast.totalLineClears < 1) {
-    throw new Error("Acceptance failed: no line clears in replay.");
-  }
-  const boardHeight = script.boardHeight ?? grassTarget.length;
-  const boardWidth = script.boardWidth ?? (grassTarget[0]?.length ?? 0);
-  // Diversity gate: canonical 10x20 requires >=4; smaller boards (e.g., 53x7 week grid) allow >=2.
-  const minDistinctTypes = boardWidth >= 10 && boardHeight >= 20 ? 4 : 2;
-  if (fast.usedTypes.size < minDistinctTypes) {
-    throw new Error(
-      `Acceptance failed: need >=${minDistinctTypes} piece types, got ${fast.usedTypes.size}`,
-    );
-  }
-  return { script, grassTarget, fast };
-}
 
 function resolveWorkspaceRoots(workspaceRoot: string | undefined): {
   workspaceRootResolved: string | null;
@@ -123,34 +57,25 @@ function resolveWorkspaceRoots(workspaceRoot: string | undefined): {
   return { workspaceRootResolved, workspaceRootCanonical };
 }
 
-export interface RenderAndWriteOpts {
-  script: ReplayScript;
-  fast: SimulationResult;
+export async function renderAndWriteGrassOutputs(opts: {
+  svgByPalette: Map<OutputPalette, string>;
   outputs: OutputTarget[];
-  workspaceRootResolved: string | null;
   workspaceRootCanonical: string | null;
-}
-
-/** Expand frames, render SVG per palette (cached), write each output path. */
-export async function renderAndWriteReplayOutputs(opts: RenderAndWriteOpts): Promise<void> {
-  const { script, fast, outputs, workspaceRootCanonical } = opts;
-  const { frames } = simulateReplayForFrames(script);
-  const svgByPalette = new Map<OutputPalette, string>();
+}): Promise<void> {
+  const { svgByPalette, outputs, workspaceRootCanonical } = opts;
 
   for (const out of outputs) {
     let filePath = out.filePath;
     if (workspaceRootCanonical) {
       assertPathInsideRoot(filePath, workspaceRootCanonical, { requireProperDescendant: true });
     }
-    let svg = svgByPalette.get(out.palette);
+    const svg = svgByPalette.get(out.palette);
     if (!svg) {
-      svg = buildAnimatedSvg(frames, paletteFor(out.palette));
-      svgByPalette.set(out.palette, svg);
+      throw new Error(`Missing SVG for palette '${out.palette}'`);
     }
     const dir = dirname(filePath);
     let writeTarget = filePath;
     if (workspaceRootCanonical) {
-      // Validate existing ancestor paths before creating any directories to prevent TOCTOU symlink escapes.
       const dirParts = relative(workspaceRootCanonical, resolve(dir)).split(sep).filter((p) => p.length > 0);
       let validatedDir = workspaceRootCanonical;
       for (const part of dirParts) {
@@ -173,25 +98,26 @@ export async function renderAndWriteReplayOutputs(opts: RenderAndWriteOpts): Pro
     }
   }
 
-  console.log(
-    `Wrote ${outputs.length} file(s) (${frames.length} frames, ${script.steps.length} locks, ${fast.totalLineClears} line clears).`,
-  );
+  console.log(`Wrote ${outputs.length} SVG file(s) (group-drop animation).`);
 }
 
 /**
- * Fetch contributions, plan deterministic replay, verify, write one SVG per output target.
+ * Fetch contributions, build group-drop SVGs, write one file per output target.
  */
 export async function runTetrassGenerate(opts: GenerateOptions): Promise<void> {
   const { login, token, outputs, useSample, workspaceRoot, allowUnauthenticatedFallback } = opts;
   if (outputs.length === 0) throw new Error("At least one output path is required.");
 
-  const days = await fetchOrBuildContributionDays({
+  const cal = await fetchOrBuildContributionCalendar({
     login,
     token,
     useSample,
     allowUnauthenticatedFallback,
   });
-  const { script, fast } = planAndVerifyReplay(days);
+  const { board, meta } = contributionCalendarToLevelBoard(cal);
+  const groups = splitBoardIntoColumnGroups(board, meta);
+  const segments = buildDropSchedule(groups);
+
   const { workspaceRootResolved, workspaceRootCanonical } = resolveWorkspaceRoots(workspaceRoot);
   const outputsForRender =
     workspaceRootResolved != null
@@ -207,11 +133,19 @@ export async function runTetrassGenerate(opts: GenerateOptions): Promise<void> {
     }
     seenOutputPaths.add(filePath);
   }
-  await renderAndWriteReplayOutputs({
-    script,
-    fast,
+
+  const neededPalettes = new Set(outputsForRender.map((o) => o.palette));
+  const svgByPalette = new Map<OutputPalette, string>();
+  if (neededPalettes.has("light")) {
+    svgByPalette.set("light", buildGrassDropSvg(segments, paletteFor("light")));
+  }
+  if (neededPalettes.has("dark")) {
+    svgByPalette.set("dark", buildGrassDropSvg(segments, paletteFor("dark")));
+  }
+
+  await renderAndWriteGrassOutputs({
+    svgByPalette,
     outputs: outputsForRender,
-    workspaceRootResolved,
     workspaceRootCanonical,
   });
 }
@@ -235,9 +169,7 @@ export function parseOutputLines(raw: string, workspaceRoot: string): OutputTarg
       const pal = params.get("palette");
       if (pal === "github-dark" || pal === "dark") palette = "dark";
       else if (pal && pal !== "light") {
-        console.warn(
-          `Unrecognized palette '${pal}' for output '${filePart}'; defaulting to light.`,
-        );
+        console.warn(`Unrecognized palette '${pal}' for output '${filePart}'; defaulting to light.`);
       }
     }
 
@@ -279,10 +211,6 @@ function canonicalWorkspaceRootDir(workspaceResolved: string): string {
   }
 }
 
-/**
- * Resolve symlinks on existing path prefixes so a lexically in-repo path cannot escape via e.g. `img -> /tmp`.
- * Tail segments that do not exist yet are appended under the last resolved directory.
- */
 function canonicalizeOutputPathUnderWorkspace(lexicalAbs: string, workspaceResolved: string): string {
   const rootCanon = canonicalWorkspaceRootDir(workspaceResolved);
   assertPathInsideRoot(lexicalAbs, workspaceResolved, { requireProperDescendant: true });
@@ -307,10 +235,6 @@ function isErrnoCode(e: unknown, code: string): boolean {
   return typeof e === "object" && e !== null && "code" in e && (e as NodeJS.ErrnoException).code === code;
 }
 
-/**
- * Write UTF-8 text without following a symlink at the final path component (Unix: O_NOFOLLOW).
- * Mitigates escape via pre-existing symlink at the output path after directory checks.
- */
 async function writeUtf8FileRejectSymlinkTarget(filePath: string, data: string): Promise<void> {
   if (fsConstants.O_NOFOLLOW === undefined) {
     try {

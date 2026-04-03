@@ -1,37 +1,41 @@
-import type { Board } from "../domain/types.js";
-import { BOARD_HEIGHT, BOARD_WIDTH } from "../domain/types.js";
-import { getCells } from "../domain/tetromino.js";
-import type { PiecePlacement } from "../domain/types.js";
-import type { SimulationFrame } from "../simulator/simulateReplay.js";
-import { getBoardDimensions } from "../domain/board.js";
+import type { GrassDropLevel, GroupDropSegment } from "../domain/grass.js";
+import { GRID_VISIBLE_WEEKS, GRID_WEEKDAYS } from "../domain/grass.js";
+import { totalCycleMs } from "../grass/groupDropPlanner.js";
 
 /**
- * Colors for empty / grass / ghost cells in the SVG renderer.
- * Callers may pass arbitrary strings; {@link buildAnimatedSvg} and {@link buildSymbols} run
- * {@link sanitizePalette} so only safe CSS colors reach `fill="..."` (no attribute injection).
+ * GitHub-style contribution colors. Level 0 is the empty cell (not background).
+ * FIRST_QUARTILE = lightest green … FOURTH_QUARTILE = strongest.
  */
-export interface SvgPalette {
-  empty: string;
-  grass: string;
-  ghost: string;
+export interface GrassPalette {
+  emptyCell: string;
+  level1: string;
+  level2: string;
+  level3: string;
+  level4: string;
+  /** SVG canvas behind the grid (page background). */
+  canvas: string;
 }
 
-export const PALETTE_LIGHT: SvgPalette = {
-  empty: "#ebedf0",
-  grass: "#216e39",
-  ghost: "#9be9a8",
+export const PALETTE_LIGHT: GrassPalette = {
+  canvas: "#ffffff",
+  emptyCell: "#ebedf0",
+  level1: "#9be9a8",
+  level2: "#40c463",
+  level3: "#30a14e",
+  level4: "#216e39",
 };
 
-export const PALETTE_DARK: SvgPalette = {
-  empty: "#161b22",
-  grass: "#39d353",
-  ghost: "#0e4429",
+export const PALETTE_DARK: GrassPalette = {
+  canvas: "#0d1117",
+  emptyCell: "#161b22",
+  level1: "#0e4429",
+  level2: "#006d32",
+  level3: "#26a641",
+  level4: "#39d353",
 };
 
-/** Fallback when a palette color is missing or fails validation (matches `PALETTE_LIGHT.empty`). */
 const DEFAULT_SAFE_COLOR = "#ebedf0";
 
-/** CSS named colors (lowercase) allowed in `fill` after validation. */
 const CSS_NAMED_COLORS = new Set(
   `aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal thistle tomato transparent turquoise violet wheat white whitesmoke yellow yellowgreen`.split(
     /\s+/,
@@ -99,10 +103,6 @@ function isValidRgbaFunction(value: string): boolean {
   return validateRgbLikeChannel(r) && validateRgbLikeChannel(g) && validateRgbLikeChannel(b) && validateAlphaChannel(a);
 }
 
-/**
- * Returns `value` if it is a safe SVG/CSS color for double-quoted attributes; otherwise `DEFAULT_SAFE_COLOR`.
- * Allows `#rgb` / `#rrggbb`, `rgb()` / `rgba()`, and CSS named colors from {@link CSS_NAMED_COLORS}.
- */
 export function validateColor(value: string): string {
   const s = value.trim();
   if (s.length === 0) return DEFAULT_SAFE_COLOR;
@@ -120,170 +120,186 @@ export function validateColor(value: string): string {
   return DEFAULT_SAFE_COLOR;
 }
 
-export function sanitizePalette(p: SvgPalette): SvgPalette {
+export function sanitizeGrassPalette(p: GrassPalette): GrassPalette {
   return {
-    empty: validateColor(p.empty),
-    grass: validateColor(p.grass),
-    ghost: validateColor(p.ghost),
+    canvas: validateColor(p.canvas),
+    emptyCell: validateColor(p.emptyCell),
+    level1: validateColor(p.level1),
+    level2: validateColor(p.level2),
+    level3: validateColor(p.level3),
+    level4: validateColor(p.level4),
   };
 }
 
-const CELL = 18;
+const cellSize = 18;
+const step = 20; // cellSize + 2px gap
 const PAD = 2;
+const RX = 2;
+/** Fraction of cycle used to snap back to the initial state before repeat. */
+const CYCLE_TAIL_RESET = 0.0012;
+/**
+ * Minimum spacing between consecutive normalized keyTimes so `toFixed(6)` stays strictly increasing
+ * (SMIL requires strictly monotonic keyTimes).
+ */
+const SMIL_KEY_GAP = 2e-6;
 
-/** SMIL: visible duration per simulation frame in one loop cycle. */
-const SVG_FRAME_DURATION_MS = 80;
-/** SMIL: extra hold on the final frame before the cycle repeats. */
-const SVG_HOLD_LAST_FRAME_MS = 1500;
+type SmilKeyframeFrac =
+  | { mode: "zero"; b: number; r: number }
+  | { mode: "off"; a: number; b: number; r: number };
+
+/** Normalize drop endpoints so `0 < b < r < 1` (or `0 < a < b < r < 1`) before formatting. */
+function clampSmilKeyframeFractions(
+  startMs: number,
+  dropDurationMs: number,
+  cycleMs: number,
+): SmilKeyframeFrac {
+  const cycle = Math.max(1, cycleMs);
+  const g = SMIL_KEY_GAP;
+
+  const rTail = Math.max(0, 1 - CYCLE_TAIL_RESET);
+  const bRaw = (startMs + dropDurationMs) / cycle;
+  const aRaw = startMs / cycle;
+
+  if (aRaw <= Number.EPSILON) {
+    let b = Math.min(bRaw, rTail - g);
+    b = Math.max(b, g);
+    let r = Math.max(rTail, b + g);
+    r = Math.min(r, 1 - g);
+    return { mode: "zero", b, r };
+  }
+
+  let a = Math.min(aRaw, rTail - 3 * g);
+  a = Math.max(a, g);
+  let b = Math.min(bRaw, rTail - g);
+  b = Math.max(b, a + g);
+  let r = Math.max(rTail, b + g);
+  r = Math.min(r, 1 - g);
+
+  if (!(a < b && b < r)) {
+    a = g;
+    b = 3 * g;
+    r = 1 - g;
+  }
+
+  return { mode: "off", a, b, r };
+}
+
+function cellPx(x: number, y: number): { px: number; py: number } {
+  return { px: PAD + x * step, py: PAD + y * step };
+}
 
 function cellUse(x: number, y: number, href: string): string {
-  const px = PAD + x * CELL;
-  const py = PAD + y * CELL;
+  const { px, py } = cellPx(x, y);
   return `<use href="#${href}" x="${px}" y="${py}"/>`;
 }
 
-function getFrameBoardDimensions(frames: SimulationFrame[]): { width: number; height: number } {
-  const first = frames[0];
-  if (!first) return { width: BOARD_WIDTH, height: BOARD_HEIGHT };
-  const { width, height } = getBoardDimensions(first.board);
-  return {
-    width: width || BOARD_WIDTH,
-    height: height || BOARD_HEIGHT,
-  };
-}
-
-function buildSymbols(palette: SvgPalette): string {
-  const { empty: e, grass: g, ghost: h } = palette;
+function buildSymbols(p: GrassPalette): string {
+  const { emptyCell: e, level1: l1, level2: l2, level3: l3, level4: l4 } = p;
+  const sym = (id: string, fill: string) =>
+    `<symbol id="${id}" viewBox="0 0 ${cellSize} ${cellSize}"><rect width="${cellSize}" height="${cellSize}" fill="${fill}" rx="${RX}"/></symbol>`;
   return `<defs>
-<symbol id="cE" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${e}" rx="2"/></symbol>
-<symbol id="cG" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${g}" rx="2"/></symbol>
-<symbol id="cH" viewBox="0 0 ${CELL} ${CELL}"><rect width="${CELL}" height="${CELL}" fill="${h}" rx="2"/></symbol>
+${sym("cE", e)}
+${sym("cG1", l1)}
+${sym("cG2", l2)}
+${sym("cG3", l3)}
+${sym("cG4", l4)}
 </defs>`;
 }
 
-function renderActiveUses(active: PiecePlacement | null, width: number, height: number): string {
-  if (!active) return "";
-  const cells = getCells(active.type, active.rotation, active.x, active.y);
+function levelHref(level: GrassDropLevel): string {
+  return `cG${level}`;
+}
+
+/** SMIL keyTimes must be strictly increasing; when `startMs === 0`, omit the duplicate leading `0`. */
+function smilDropTimeline(
+  startMs: number,
+  dropDurationMs: number,
+  cycleMs: number,
+  fallPx: number,
+): { keyTimes: string; translateValues: string; opValues: string } {
+  const k = clampSmilKeyframeFractions(startMs, dropDurationMs, cycleMs);
+  const fmt = (t: number): string => t.toFixed(6);
+  if (k.mode === "zero") {
+    return {
+      keyTimes: `0;${fmt(k.b)};${fmt(k.r)};1`,
+      translateValues: `0,-${fallPx};0,0;0,0;0,-${fallPx}`,
+      opValues: `1;1;0;0`,
+    };
+  }
+  return {
+    keyTimes: `0;${fmt(k.a)};${fmt(k.b)};${fmt(k.r)};1`,
+    translateValues: `0,-${fallPx};0,-${fallPx};0,0;0,0;0,-${fallPx}`,
+    opValues: `0;1;1;0;0`,
+  };
+}
+
+/** Exposed for unit tests: normalized SMIL keyTimes for one drop segment. */
+export function smilDropKeyTimesForTest(startMs: number, dropDurationMs: number, cycleMs: number): string {
+  return smilDropTimeline(startMs, dropDurationMs, cycleMs, 0).keyTimes;
+}
+
+function renderEmptyGrid(): string {
   let s = "";
-  const safeWidth = Math.max(width, 0);
-  const safeHeight = Math.max(height, 0);
-  for (const [cx, cy] of cells) {
-    if (cy >= 0 && cy < safeHeight && cx >= 0 && cx < safeWidth) {
-      s += cellUse(cx, cy, "cH");
+  for (let y = 0; y < GRID_WEEKDAYS; y++) {
+    for (let x = 0; x < GRID_VISIBLE_WEEKS; x++) {
+      s += cellUse(x, y, "cE");
     }
   }
   return s;
 }
 
-function toKeyTime(frameIdx: number, frameDurMs: number, cycleMs: number): string {
-  return ((frameIdx * frameDurMs) / cycleMs).toFixed(6);
-}
-
-function renderBaseEmptyGrid(width: number, height: number): string {
-  let s = "";
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) s += cellUse(x, y, "cE");
-  }
-  return s;
-}
-
-function renderBoardCellAnimations(
-  frames: SimulationFrame[],
-  width: number,
-  height: number,
-  frameDurMs: number,
+function renderGroupDrop(
+  seg: GroupDropSegment,
   cycleMs: number,
 ): string {
-  const n = frames.length;
-  let out = "";
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const states: number[] = [];
-      for (let i = 0; i < n; i++) states.push(frames[i].board[y][x] ? 1 : 0);
-      const values: string[] = [];
-      const keyTimes: string[] = [];
-      let prev = states[0] ?? 0;
-      values.push(String(prev));
-      keyTimes.push("0");
-      for (let i = 1; i < n; i++) {
-        const cur = states[i];
-        if (cur === prev) continue;
-        keyTimes.push(toKeyTime(i, frameDurMs, cycleMs));
-        values.push(String(cur));
-        prev = cur;
-      }
-      keyTimes.push("1");
-      values.push(String(prev));
-      // Skip cells that are always empty.
-      if (!values.some((v) => v === "1")) continue;
-      const px = PAD + x * CELL;
-      const py = PAD + y * CELL;
-      out += `<use href="#cG" x="${px}" y="${py}" opacity="${states[0] ? 1 : 0}">
-<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes.join(";")}" values="${values.join(";")}"/>
-</use>`;
-    }
-  }
-  return out;
-}
+  const fallPx = seg.fallOffsetCells * step;
+  const { startMs, dropDurationMs } = seg;
+  const { keyTimes, translateValues, opValues } = smilDropTimeline(startMs, dropDurationMs, cycleMs, fallPx);
 
-function renderActiveGroups(
-  frames: SimulationFrame[],
-  width: number,
-  height: number,
-  frameDurMs: number,
-  cycleMs: number,
-): string {
-  const n = frames.length;
-  const groups: string[] = [];
-  for (let i = 0; i < n; i++) {
-    const inner = renderActiveUses(frames[i].active, width, height);
-    if (!inner) continue;
-    if (i < n - 1) {
-      const start = toKeyTime(i, frameDurMs, cycleMs);
-      const end = toKeyTime(i + 1, frameDurMs, cycleMs);
-      groups.push(`<g opacity="0">
-${inner}
-<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="0;${start};${end};1" values="0;1;0;0"/>
-</g>`);
-    } else {
-      const start = toKeyTime(i, frameDurMs, cycleMs);
-      groups.push(`<g opacity="0">
-${inner}
-<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="0;${start};1" values="0;1;1"/>
-</g>`);
-    }
+  const inner = seg.cells
+    .map((c) => {
+      const href = levelHref(c.level);
+      return cellUse(c.x, c.y, href);
+    })
+    .join("\n");
+
+  if (!inner) {
+    return "";
   }
-  return groups.join("\n");
+
+  return `<g>
+<animate attributeName="opacity" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="discrete" keyTimes="${keyTimes}" values="${opValues}"/>
+<g>
+<animateTransform attributeName="transform" type="translate" dur="${cycleMs}ms" repeatCount="indefinite" calcMode="linear" keyTimes="${keyTimes}" values="${translateValues}"/>
+${inner}
+</g>
+</g>`;
 }
 
 /**
- * Animated SVG: compact cells via `<use>`; one `<g>` per frame with SMIL opacity.
- * `palette` is {@link sanitizePalette | sanitized} before embedding in any `fill` attribute.
+ * Animated SVG: empty grid + nine column groups falling sequentially with contribution levels.
  */
-export function buildAnimatedSvg(frames: SimulationFrame[], palette: SvgPalette): string {
-  if (frames.length === 0) throw new Error("No frames to render");
+export function buildGrassDropSvg(segments: GroupDropSegment[], palette: GrassPalette): string {
+  if (segments.length === 0) throw new Error("No drop segments");
 
-  const safePalette = sanitizePalette(palette);
-  const { width: boardWidth, height: boardHeight } = getFrameBoardDimensions(frames);
-  const W = boardWidth * CELL + PAD * 2;
-  const H = boardHeight * CELL + PAD * 2;
+  const safe = sanitizeGrassPalette(palette);
+  const cycleMs = totalCycleMs(segments);
+  const boardW = GRID_VISIBLE_WEEKS * step + PAD * 2;
+  const boardH = GRID_WEEKDAYS * step + PAD * 2;
 
-  const frameDurMs = SVG_FRAME_DURATION_MS;
-  const holdLastMs = SVG_HOLD_LAST_FRAME_MS;
-  const n = frames.length;
-  const cycleMs = n * frameDurMs + holdLastMs;
-
-  const emptyGrid = renderBaseEmptyGrid(boardWidth, boardHeight);
-  const boardAnim = renderBoardCellAnimations(frames, boardWidth, boardHeight, frameDurMs, cycleMs);
-  const activeAnim = renderActiveGroups(frames, boardWidth, boardHeight, frameDurMs, cycleMs);
+  const drops = segments.map((s) => renderGroupDrop(s, cycleMs)).filter((x) => x.length > 0).join("\n");
 
   return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Tetrass contribution animation">
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${boardW}" height="${boardH}" viewBox="0 0 ${boardW} ${boardH}" role="img" aria-label="Contribution graph animation">
 <title>Tetrass</title>
-${buildSymbols(safePalette)}
-<rect width="100%" height="100%" fill="${safePalette.empty}"/>
-${emptyGrid}
-${boardAnim}
-${activeAnim}
+${buildSymbols(safe)}
+<rect width="100%" height="100%" fill="${safe.canvas}"/>
+<g id="emptyCells">
+${renderEmptyGrid()}
+</g>
+<!-- grassDrops: animated non-zero cells only. All-zero boards keep this group empty (stable id for DOM/tests). -->
+<g id="grassDrops">
+${drops}
+</g>
 </svg>`;
 }

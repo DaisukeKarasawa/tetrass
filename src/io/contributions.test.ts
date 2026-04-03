@@ -4,7 +4,9 @@ import {
   type ContributionCalendar,
   type ContributionDay,
   buildSampleContributionDays,
-  contributionDaysToTargetBoard,
+  contributionCalendarToLevelBoard,
+  contributionDaysToLevelBoard,
+  contributionLevelToGrassLevel,
   fetchContributionCalendar,
   flattenContributionDays,
 } from "./contributions.js";
@@ -13,65 +15,117 @@ describe("flattenContributionDays", () => {
   it("concatenates weeks in order", () => {
     const cal: ContributionCalendar = {
       weeks: [
-        { contributionDays: [{ date: "2024-01-01", weekday: 1, contributionCount: 1 }] },
-        { contributionDays: [{ date: "2024-01-08", weekday: 1, contributionCount: 0 }] },
+        {
+          contributionDays: [
+            { date: "2024-01-01", weekday: 1, contributionCount: 1, contributionLevel: "FIRST_QUARTILE" },
+          ],
+        },
+        {
+          contributionDays: [
+            { date: "2024-01-08", weekday: 1, contributionCount: 0, contributionLevel: "NONE" },
+          ],
+        },
       ],
     };
     expect(flattenContributionDays(cal)).toEqual([
-      { date: "2024-01-01", weekday: 1, contributionCount: 1 },
-      { date: "2024-01-08", weekday: 1, contributionCount: 0 },
+      { date: "2024-01-01", weekday: 1, contributionCount: 1, contributionLevel: "FIRST_QUARTILE" },
+      { date: "2024-01-08", weekday: 1, contributionCount: 0, contributionLevel: "NONE" },
     ]);
   });
 });
 
-describe("contributionDaysToTargetBoard", () => {
+describe("contributionLevelToGrassLevel", () => {
+  it("maps GitHub enums to 0..4", () => {
+    expect(contributionLevelToGrassLevel("NONE")).toBe(0);
+    expect(contributionLevelToGrassLevel("FIRST_QUARTILE")).toBe(1);
+    expect(contributionLevelToGrassLevel("SECOND_QUARTILE")).toBe(2);
+    expect(contributionLevelToGrassLevel("THIRD_QUARTILE")).toBe(3);
+    expect(contributionLevelToGrassLevel("FOURTH_QUARTILE")).toBe(4);
+  });
+});
+
+describe("contributionCalendarToLevelBoard", () => {
+  it("maps API week index to x (partial first/last weeks do not shift columns)", () => {
+    const cal: ContributionCalendar = {
+      weeks: [
+        {
+          contributionDays: [
+            { date: "2024-01-03", weekday: 2, contributionCount: 1, contributionLevel: "THIRD_QUARTILE" },
+          ],
+        },
+        { contributionDays: [] },
+      ],
+    };
+    const { board, meta } = contributionCalendarToLevelBoard(cal);
+    expect(board[2]![51]).toBe(3);
+    expect(meta[2]![51]!.date).toBe("2024-01-03");
+  });
+
+  it("right-aligns to the last 53 weeks when the API returns more than 53", () => {
+    const weeks: ContributionCalendar["weeks"] = Array.from({ length: 54 }, (_, wi) => ({
+      contributionDays:
+        wi === 0
+          ? [{ date: "trimmed-only", weekday: 3, contributionCount: 9, contributionLevel: "FOURTH_QUARTILE" as const }]
+          : wi === 53
+            ? [{ date: "visible-last", weekday: 3, contributionCount: 2, contributionLevel: "FIRST_QUARTILE" as const }]
+            : [],
+    }));
+    const { board, meta } = contributionCalendarToLevelBoard({ weeks });
+    expect(board[3]![0]).toBe(0);
+    expect(meta[3]![0]!.date.startsWith("pad-")).toBe(true);
+    expect(board[3]![52]).toBe(1);
+    expect(meta[3]![52]!.date).toBe("visible-last");
+  });
+});
+
+describe("contributionDaysToLevelBoard", () => {
   it("maps GitHub-native coordinates: x=week index, y=weekday", () => {
     const days: ContributionDay[] = [
-      { date: "2024-01-01", weekday: 0, contributionCount: 0 }, // x=0,y=0
-      { date: "2024-01-02", weekday: 1, contributionCount: 0 }, // x=0,y=1
-      { date: "2024-01-03", weekday: 2, contributionCount: 1 }, // x=0,y=2
-      { date: "2024-01-04", weekday: 3, contributionCount: 0 }, // x=0,y=3
-      { date: "2024-01-05", weekday: 4, contributionCount: 0 }, // x=0,y=4
-      { date: "2024-01-06", weekday: 5, contributionCount: 0 }, // x=0,y=5
-      { date: "2024-01-07", weekday: 6, contributionCount: 0 }, // x=0,y=6
-      { date: "2024-01-08", weekday: 0, contributionCount: 1 }, // x=1,y=0
+      { date: "2024-01-01", weekday: 0, contributionCount: 0, contributionLevel: "NONE" },
+      { date: "2024-01-02", weekday: 1, contributionCount: 0, contributionLevel: "NONE" },
+      { date: "2024-01-03", weekday: 2, contributionCount: 1, contributionLevel: "THIRD_QUARTILE" },
+      { date: "2024-01-04", weekday: 3, contributionCount: 0, contributionLevel: "NONE" },
+      { date: "2024-01-05", weekday: 4, contributionCount: 0, contributionLevel: "NONE" },
+      { date: "2024-01-06", weekday: 5, contributionCount: 0, contributionLevel: "NONE" },
+      { date: "2024-01-07", weekday: 6, contributionCount: 0, contributionLevel: "NONE" },
+      { date: "2024-01-08", weekday: 0, contributionCount: 2, contributionLevel: "FOURTH_QUARTILE" },
     ];
-    const board = contributionDaysToTargetBoard(days);
+    const { board, meta } = contributionDaysToLevelBoard(days);
     expect(board).toHaveLength(7);
     expect(board[0]).toHaveLength(53);
-    expect(board[2][51]).toBe(1);
-    expect(board[0][52]).toBe(1);
+    expect(board[2][51]).toBe(3);
+    expect(board[0][52]).toBe(4);
     expect(board[6][52]).toBe(0);
+    expect(meta[2][51].date).toBe("2024-01-03");
+    expect(meta[0][52].date).toBe("2024-01-08");
   });
 
   it("infers weekday from ISO date when weekday is omitted", () => {
-    // 2024-01-01 is Tuesday in UTC => getUTCDay() === 2
     const days: ContributionDay[] = Array.from({ length: 7 }, (_, i) => ({
       date: `2024-01-0${i + 1}`,
       contributionCount: 1,
+      contributionLevel: "SECOND_QUARTILE" as const,
     }));
-    const board = contributionDaysToTargetBoard(days);
-    expect(board[2][52]).toBe(1);
+    const { board } = contributionDaysToLevelBoard(days);
+    expect(board[2][52]).toBe(2);
   });
 
   it("maps sample days to deterministic non-trivial weekly profile", () => {
-    const board = contributionDaysToTargetBoard(buildSampleContributionDays());
+    const { board } = contributionDaysToLevelBoard(buildSampleContributionDays());
     expect(board).toHaveLength(7);
     expect(board[0].length).toBe(53);
 
-    // weekdays 0 and 6 are intentionally empty in the deterministic sample.
     expect(board[0].every((c) => c === 0)).toBe(true);
     expect(board[6].every((c) => c === 0)).toBe(true);
 
-    // Interior weekdays should include contributions over many weeks.
-    expect(board[1].some((c) => c === 1)).toBe(true);
-    expect(board[5].some((c) => c === 1)).toBe(true);
+    expect(board[1].some((c) => c > 0)).toBe(true);
+    expect(board[5].some((c) => c > 0)).toBe(true);
 
-    let ones = 0;
+    let nonZero = 0;
     for (let y = 0; y < board.length; y++) {
-      for (let x = 0; x < board[0].length; x++) if (board[y][x]) ones++;
+      for (let x = 0; x < board[0]!.length; x++) if (board[y]![x]! > 0) nonZero++;
     }
-    expect(ones).toBeGreaterThan(0);
+    expect(nonZero).toBeGreaterThan(0);
   });
 });
 
@@ -88,7 +142,9 @@ describe("fetchContributionCalendar", () => {
 
   it("returns calendar on successful GraphQL response", async () => {
     const cal: ContributionCalendar = {
-      weeks: [{ contributionDays: [{ date: "2024-01-01", contributionCount: 0 }] }],
+      weeks: [
+        { contributionDays: [{ date: "2024-01-01", contributionCount: 0, contributionLevel: "NONE" }] },
+      ],
     };
     globalThis.fetch = vi.fn(() =>
       Promise.resolve({

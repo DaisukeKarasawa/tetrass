@@ -28,7 +28,8 @@ reviews:
     - path: "src/generateRunner.ts"
       instructions: |
         Shared Action/CLI core. Prioritize:
-        - Deterministic invariants: final board equals target, line clears >= 1, used piece types >= 4
+        - Deterministic output: same contribution input → same SVG
+        - Correct 53×7 mapping and nine-band (6×8 + 5) drop timeline
         - Output path safety for user-supplied `outputs`
         - No token/auth leakage in logs/errors
         Prefer correctness and safety over style nits.
@@ -47,23 +48,19 @@ reviews:
         - Safe error content (no token/header exposure)
         - Stable behavior under rate limits and empty data.
 
-    - path: "src/planner/**/*.ts"
+    - path: "src/grass/**/*.ts"
       instructions: |
-        Deterministic planning logic. Focus on regressions in:
-        - Deterministic replay construction
-        - Trimming policy correctness and documented behavior
-        - Complexity blowups or accidental nondeterminism.
+        Column-band splitting and drop scheduling. Check:
+        - Bands sum to 53 columns and match 6+6+6+6+6+6+6+6+5
+        - Sequential left-to-right timing is preserved
+        - No duplicate or dropped cells when partitioning grass cells
 
-    - path: "src/simulator/**/*.ts"
+    - path: "src/renderer/**/*.ts"
       instructions: |
-        Validate Tetris rule correctness:
-        - Lock validity, overlap/collision, gravity/drop semantics, line clears.
-        Flag behavior changes that can break acceptance invariants.
-
-    - path: "src/verify/**/*.ts"
-      instructions: |
-        Final-state verification is a quality gate.
-        Treat weakening/removal as high severity unless strongly justified.
+        SVG output and SMIL animation. Check:
+        - GitHub-like cell geometry (squares, gaps, rx) and level colors
+        - Safe embedding of palette strings (no attribute injection)
+        - Animation loops without breaking final settled appearance
 
     - path: "action/action.yml"
       instructions: |
@@ -102,8 +99,8 @@ reviews:
         instructions: |
           Pass if either:
           (A) PR does not modify runtime sources affecting action execution
-              (src/action-entry.ts, src/generateRunner.ts, src/io/**, src/planner/**,
-               src/simulator/**, src/renderer/**, src/verify/**, action/action.yml, package.json build scripts),
+              (src/action-entry.ts, src/generateRunner.ts, src/io/**, src/grass/**,
+               src/renderer/**, src/domain/**, action/action.yml, package.json build scripts),
           or
           (B) action/index.mjs is modified in the same PR.
           Fail otherwise.
@@ -132,11 +129,10 @@ reviews:
       - name: "Determinism invariants evidence"
         mode: "warning"
         instructions: |
-          Apply when PR changes src/planner/**, src/simulator/**, or src/verify/**.
+          Apply when PR changes src/grass/**, src/renderer/**, src/io/contributions.ts, or src/domain/grass.ts.
           Pass only if PR includes tests or explicit PR-description evidence for:
-          - final board equals target
-          - line clears >= 1
-          - used piece types >= 4
+          - stable mapping from API contributionLevel to rendered cells
+          - stable nine-band drop schedule for the same input
           Fail otherwise.
 
       - name: "Workflow-action contract wiring"
