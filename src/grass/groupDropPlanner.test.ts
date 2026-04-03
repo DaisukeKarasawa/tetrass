@@ -67,7 +67,7 @@ describe("splitBoardIntoColumnGroups", () => {
 });
 
 describe("buildStrictDropSchedule / golden group0", () => {
-  it("matches strict 7-frame drop for one column with two grass cells (y=0 and y=6)", () => {
+  it("matches strict 8-frame drop (leading empty + 7 steps) for one column with two grass cells (y=0 and y=6)", () => {
     const board = createEmptyLevelBoard();
     board[0]![2] = 1;
     board[6]![2] = 1;
@@ -79,9 +79,10 @@ describe("buildStrictDropSchedule / golden group0", () => {
     );
     const groups = splitBoardIntoColumnGroups(board, meta);
     const schedule = buildStrictDropSchedule(groups);
-    expect(schedule.frames).toHaveLength(7);
+    expect(schedule.frames).toHaveLength(8);
+    expect(schedule.frames[0]!.placements).toEqual([]);
     const expected = expectedGroup0TwoCellColumnFrames();
-    for (let i = 0; i < 7; i++) {
+    for (let i = 0; i < 8; i++) {
       const got = normalizeGolden(
         schedule.frames[i]!.placements.map((p) => ({
           displayX: p.absX,
@@ -167,6 +168,6 @@ describe("totalCycleMs", () => {
       })),
     );
     const schedule = buildStrictDropSchedule(splitBoardIntoColumnGroups(board, meta));
-    expect(totalCycleMs(schedule)).toBe(7 * STRICT_STEP_MS + HOLD_AFTER_LAST_MS);
+    expect(totalCycleMs(schedule)).toBe(8 * STRICT_STEP_MS + HOLD_AFTER_LAST_MS);
   });
 });

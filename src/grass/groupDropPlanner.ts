@@ -147,6 +147,9 @@ export function splitBoardIntoColumnGroups(board: LevelBoard, meta: GrassCellMet
  * Groups are processed in ascending {@link GrassColumnGroup.xStart} so schedule order
  * stays left-to-right even if the caller passes a shuffled array (e.g. not from
  * {@link splitBoardIntoColumnGroups}).
+ *
+ * When there is at least one animated frame, a leading frame with empty placements is
+ * prepended so the cycle starts with the contribution grid fully empty (grey cells only).
  */
 export function buildStrictDropSchedule(groups: GrassColumnGroup[]): GrassStrictSchedule {
   const orderedBands = [...groups].sort((a, b) => a.xStart - b.xStart || a.index - b.index);
@@ -158,6 +161,9 @@ export function buildStrictDropSchedule(groups: GrassColumnGroup[]): GrassStrict
     }
   }
   const frames: StrictDropFrame[] = allPlacements.map((placements) => ({ placements }));
+  if (frames.length > 0) {
+    frames.unshift({ placements: [] });
+  }
   return {
     stepDurationMs: STRICT_STEP_MS,
     frames,

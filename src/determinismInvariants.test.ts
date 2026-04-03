@@ -116,7 +116,7 @@ describe("Determinism: nine-band schedule & strict discrete model", () => {
   it("keeps a golden frame count for the 9-band one-cell-per-band fixture (regression guard)", () => {
     const { board, meta } = createOneCellPerBandFixture();
     const schedule = buildStrictDropSchedule(splitBoardIntoColumnGroups(board, meta));
-    /** One discrete frame per group (single y=0 cell at each band's xStart). */
-    expect(schedule.frames).toHaveLength(9);
+    /** Leading empty frame + one discrete frame per group (single y=0 cell at each band's xStart). */
+    expect(schedule.frames).toHaveLength(10);
   });
 });

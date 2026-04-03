@@ -58,6 +58,7 @@ export interface StrictDropFrame {
 /**
  * Full SMIL timeline: discrete frames of equal duration, then hold, then loop.
  * Built from nine column groups processed left → right.
+ * When non-empty, {@link StrictDropFrame.placements} for index 0 is always empty (all-grey start).
  */
 export interface GrassStrictSchedule {
   stepDurationMs: number;

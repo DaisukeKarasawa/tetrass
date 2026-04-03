@@ -23,10 +23,11 @@ export function normalizeGolden(cells: GoldenCell[]): GoldenCell[] {
   });
 }
 
-/** Expected 7 frames for group 0 with only column x=2 having grass at y=0 and y=6, level 1. */
+/** Expected 8 frames: leading all-empty, then 7 drop steps for group 0, column x=2, grass at y=0 and y=6, level 1. */
 export function expectedGroup0TwoCellColumnFrames(): GoldenCell[][] {
   const L = 1 as GrassDropLevel;
   return [
+    [],
     [{ displayX: 2, displayY: 0, sourceX: 2, sourceY: 6, level: L }],
     [{ displayX: 2, displayY: 1, sourceX: 2, sourceY: 6, level: L }],
     [{ displayX: 2, displayY: 2, sourceX: 2, sourceY: 6, level: L }],

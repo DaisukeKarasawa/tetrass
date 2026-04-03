@@ -324,6 +324,9 @@ function buildStrictDropSchedule(groups) {
     }
   }
   const frames = allPlacements.map((placements) => ({ placements }));
+  if (frames.length > 0) {
+    frames.unshift({ placements: [] });
+  }
   return {
     stepDurationMs: STRICT_STEP_MS,
     frames,
