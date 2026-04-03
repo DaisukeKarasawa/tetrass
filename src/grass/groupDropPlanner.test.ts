@@ -132,9 +132,13 @@ describe("buildDropSchedule", () => {
     const idxSecond = schedule.frames.findIndex((fr) =>
       fr.placements.some((p) => p.absX >= secondGroupXMin),
     );
-    const idxFirstLast = schedule.frames.findLastIndex((fr) =>
-      fr.placements.some((p) => p.absX <= firstGroupXMax),
-    );
+    let idxFirstLast = -1;
+    for (let i = schedule.frames.length - 1; i >= 0; i--) {
+      if (schedule.frames[i]!.placements.some((p) => p.absX <= firstGroupXMax)) {
+        idxFirstLast = i;
+        break;
+      }
+    }
     expect(idxSecond).toBeGreaterThan(idxFirstLast);
   });
 });
