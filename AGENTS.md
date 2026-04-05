@@ -33,10 +33,15 @@ This repository generates **deterministic animated SVGs** of that Overview-equiv
 
 CI alone does not block merges until the repository enforces it.
 
-1. Open **Settings → Rules → Rulesets** (or **Branches → Branch protection rules** on classic UI).
-2. Add a ruleset (or rule) for `main` that **requires status checks before merge**.
-3. Require the check named **`CI / CI required`** (workflow `CI`, job `required` with display name `CI required`). After the first successful run, it appears in the status-check picker.
-4. Optionally turn on **Require branches to be up to date before merging** so the tip of the branch was tested.
+For **Rulesets**, the status-check picker lists **job names** from GitHub Actions (e.g. **`validate`** for `.github/workflows/ci.yml`), not the workflow file name and not a `workflow / job` string unless your UI shows that exact label.
+
+**Recommended for this repo:** require **`validate`**. It is the only job that runs the real checks (`npm ci`, `npm run build`, `npm test`, bundle drift).
+
+Do **not** point branch protection at a downstream job that only has `needs: [validate]` and no `if: ${{ always() }}`: if `validate` fails, that job is **skipped**, and skipped checks can still allow a merge. If you ever add a wrapper job that must gate merges by name, use `if: ${{ always() }}` and fail the step when `needs.validate.result != 'success'` (see GitHub Actions docs on required checks).
+
+Solo baseline ruleset knobs often include: **Require a pull request before merging**, **Require status checks to pass** (with **`validate`** added), **Block force pushes**, **Restrict deletions**. Optionally **Require branches to be up to date before merging**.
+
+If you add more workflows later, keep **job ids unique across workflows**; generic names like `validate` can collide and confuse required-check selection.
 
 ## Review guidelines
 
