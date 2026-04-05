@@ -33,9 +33,9 @@ This repository generates **deterministic animated SVGs** of that Overview-equiv
 
 CI alone does not block merges until the repository enforces it.
 
-For **Rulesets**, the status-check picker lists **check names** shown by GitHub Actions (for this repo, require **`CI / CI required`**), not the workflow file name.
+For **Rulesets**, the status-check picker lists **job names** from GitHub Actions (e.g. **`validate`** for `.github/workflows/ci.yml`), not the workflow file name and not a `workflow / job` string unless your UI shows that exact label.
 
-**Recommended for this repo:** require **`CI / CI required`** as the single merge gate. It should pass only after real checks (`npm ci`, `npm run build`, `npm test`, bundle drift) succeed.
+**Recommended for this repo:** require **`validate`**. It is the only job that runs the real checks (`npm ci`, `npm run build`, `npm test`, bundle drift).
 
 Do **not** point branch protection at a downstream job that only has `needs: [validate]` and no `if: ${{ always() }}`: if `validate` fails, that job is **skipped**, and skipped checks can still allow a merge. If you ever add a wrapper job that must gate merges by name, use `if: ${{ always() }}` and fail the step when `needs.validate.result != 'success'` (see GitHub Actions docs on required checks).
 
