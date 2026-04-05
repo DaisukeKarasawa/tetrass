@@ -60,7 +60,12 @@ export function resolveGenerateOptions(
   }
 
   const outputsRaw = env.INPUT_OUTPUTS ?? "";
-  const workspace = env.GITHUB_WORKSPACE ?? process.cwd();
+  const workspace = env.GITHUB_WORKSPACE?.trim();
+  if (!workspace) {
+    throw new Error(
+      "GITHUB_WORKSPACE is not set. This action must run inside a GitHub Actions environment.",
+    );
+  }
   const outputs = parseOutputLines(outputsRaw, workspace);
   if (outputs.length === 0) {
     throw new Error("INPUT_OUTPUTS must list at least one output path.");

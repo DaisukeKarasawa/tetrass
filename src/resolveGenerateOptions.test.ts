@@ -54,6 +54,19 @@ describe("resolveGenerateOptions", () => {
       ).toThrow(/GITHUB_TOKEN is required/);
     });
 
+    it("requires GITHUB_WORKSPACE in github-action context", () => {
+      expect(() =>
+        resolveGenerateOptions(
+          {
+            INPUT_GITHUB_USER_NAME: "octocat",
+            INPUT_OUTPUTS: "./img/a.svg",
+            GITHUB_TOKEN: "tok",
+          },
+          { context: "github-action" },
+        ),
+      ).toThrow(/GITHUB_WORKSPACE is not set/);
+    });
+
     it("returns options when valid", () => {
       const opts = resolveGenerateOptions(
         {
