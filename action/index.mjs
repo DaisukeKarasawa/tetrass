@@ -1,6 +1,6 @@
 // src/generateRunner.ts
 import { constants as fsConstants, existsSync, realpathSync } from "node:fs";
-import { lstat, mkdir, open, writeFile } from "node:fs/promises";
+import { mkdir, open, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // src/domain/grass.ts
@@ -744,16 +744,9 @@ function isErrnoCode(e, code) {
 }
 async function writeUtf8FileRejectSymlinkTarget(filePath, data) {
   if (fsConstants.O_NOFOLLOW === void 0) {
-    try {
-      const st = await lstat(filePath);
-      if (st.isSymbolicLink()) {
-        throw new Error(`Refusing to write through symbolic link: '${filePath}'`);
-      }
-    } catch (e) {
-      if (!isErrnoCode(e, "ENOENT")) throw e;
-    }
-    await writeFile(filePath, data, "utf8");
-    return;
+    throw new Error(
+      "O_NOFOLLOW is not available on this platform. Symlink-safe writes require Linux or macOS."
+    );
   }
   const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW;
   let handle;
@@ -811,7 +804,12 @@ function resolveGenerateOptions(env, args) {
     throw new Error("Invalid GitHub username format.");
   }
   const outputsRaw = env.INPUT_OUTPUTS ?? "";
-  const workspace = env.GITHUB_WORKSPACE ?? process.cwd();
+  const workspace = env.GITHUB_WORKSPACE?.trim();
+  if (!workspace) {
+    throw new Error(
+      "GITHUB_WORKSPACE is not set. This action must run inside a GitHub Actions environment."
+    );
+  }
   const outputs = parseOutputLines(outputsRaw, workspace);
   if (outputs.length === 0) {
     throw new Error("INPUT_OUTPUTS must list at least one output path.");

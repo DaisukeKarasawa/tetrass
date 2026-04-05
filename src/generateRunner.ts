@@ -1,5 +1,5 @@
 import { constants as fsConstants, existsSync, realpathSync } from "node:fs";
-import { lstat, mkdir, open, writeFile } from "node:fs/promises";
+import { mkdir, open, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 import {
@@ -237,16 +237,9 @@ function isErrnoCode(e: unknown, code: string): boolean {
 
 async function writeUtf8FileRejectSymlinkTarget(filePath: string, data: string): Promise<void> {
   if (fsConstants.O_NOFOLLOW === undefined) {
-    try {
-      const st = await lstat(filePath);
-      if (st.isSymbolicLink()) {
-        throw new Error(`Refusing to write through symbolic link: '${filePath}'`);
-      }
-    } catch (e) {
-      if (!isErrnoCode(e, "ENOENT")) throw e;
-    }
-    await writeFile(filePath, data, "utf8");
-    return;
+    throw new Error(
+      "O_NOFOLLOW is not available on this platform. Symlink-safe writes require Linux or macOS.",
+    );
   }
 
   const flags =
