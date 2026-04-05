@@ -11,10 +11,14 @@ permissions:
   contents: read
 
 jobs:
+  # Rulesets / branch protection: require the job name `validate` (not the workflow name).
   validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5.0.1
+
+      # Pinned release (there is no floating `v1` tag for this action).
+      - uses: rhysd/actionlint@v1.7.12
 
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
@@ -25,3 +29,16 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: git diff --exit-code action/index.mjs
+
+      - name: Smoke test composite action (offline sample)
+        uses: ./action
+        with:
+          github_user_name: sample
+          outputs: |
+            tmp/ci-smoke/tetrass.svg
+            tmp/ci-smoke/tetrass-dark.svg?palette=github-dark
+        env:
+          TETRASS_USE_SAMPLE: "1"
+
+      - name: Verify smoke outputs exist
+        run: test -s tmp/ci-smoke/tetrass.svg && test -s tmp/ci-smoke/tetrass-dark.svg
