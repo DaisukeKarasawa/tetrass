@@ -25,3 +25,11 @@ jobs:
       - run: npm run build
       - run: npm test
       - run: git diff --exit-code action/index.mjs
+
+  # Single check name for branch protection: require "CI / CI required" on `main`.
+  required:
+    name: CI required
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "CI passed"

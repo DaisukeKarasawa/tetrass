@@ -29,6 +29,15 @@ This repository generates **deterministic animated SVGs** of that Overview-equiv
 - Build TS + action bundle: `npm run build`
 - Tests: `npm test`
 
+## Merge gating (GitHub)
+
+CI alone does not block merges until the repository enforces it.
+
+1. Open **Settings → Rules → Rulesets** (or **Branches → Branch protection rules** on classic UI).
+2. Add a ruleset (or rule) for `main` that **requires status checks before merge**.
+3. Require the check named **`CI / CI required`** (workflow `CI`, job `required` with display name `CI required`). After the first successful run, it appears in the status-check picker.
+4. Optionally turn on **Require branches to be up to date before merging** so the tip of the branch was tested.
+
 ## Review guidelines
 
 Prioritize **P0/P1** regressions for correctness and safety.
