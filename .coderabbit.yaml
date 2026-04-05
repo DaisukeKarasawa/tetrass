@@ -108,10 +108,19 @@ reviews:
       - name: "Action contract docs sync"
         mode: "warning"
         instructions: |
-          Apply when PR changes action/action.yml inputs or output query semantics in
-          src/generateRunner.ts parseOutputLines.
-          Pass only if README usage snippet and Inputs section are updated consistently.
-          Fail when contract changed but README remains stale.
+          Contract location (mandatory): The GitHub Action manifest is **action/action.yml**
+          (composite action in subdirectory). There is **no** action.yml at the repository root
+          by design. **Never** mark this check Inconclusive solely because ./action.yml or
+          ./action.yaml is missing at the root; always read **action/action.yml** for the
+          inputs/outputs contract.
+
+          Step 1 — Scope: If the PR does not modify action/action.yml, README.md, or
+          src/generateRunner.ts (outputs / parseOutputLines semantics), **Pass** with reason
+          "N/A: action contract and docs paths unchanged."
+
+          Step 2 — When action/action.yml or relevant generator output parsing changes: verify
+          README usage snippet and Inputs section match the manifest. **Fail** if README is
+          stale; **Pass** when consistent.
 
       - name: "Output path boundary guard"
         mode: "warning"
