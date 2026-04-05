@@ -11,6 +11,8 @@ This repository publishes generated assets and an action bundle. CI correctness 
      - install (`npm ci`)
      - build (`npm run build`)
      - tests (`npm test`)
+     - workflow YAML lint (`actionlint`)
+     - composite-action smoke (`uses: ./action` with sample mode)
 
 2. Bundle drift prevention
    - If `action/index.mjs` is tracked, ensure workflow detects stale bundle after build.
