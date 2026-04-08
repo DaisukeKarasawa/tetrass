@@ -111,14 +111,34 @@ export function flattenContributionDays(cal: ContributionCalendar): Contribution
 }
 
 /**
- * Wrap a flat day list into synthetic week buckets of up to 7 consecutive days (offline/sample only).
+ * Wrap a flat day list into synthetic week buckets aligned to GitHub's Sunday-start week boundary (offline/sample only).
  * Real GitHub calendars should use {@link contributionCalendarToLevelBoard} with API `weeks` as-is.
+ * 
+ * The first chunk may be a partial week (1-6 days) if the first day is not Sunday.
+ * Subsequent chunks are exactly 7 days, each starting on Sunday.
  */
 export function chunkDaysIntoWeeks(days: ContributionDay[]): ContributionCalendar {
   const weeks: { contributionDays: ContributionDay[] }[] = [];
-  for (let i = 0; i < days.length; i += GRID_WEEKDAYS) {
+  if (days.length === 0) {
+    return { weeks };
+  }
+
+  let i = 0;
+  
+  // Handle the first partial week: find the first Sunday
+  const firstWeekday = inferredWeekdayAt(days[0]!);
+  if (firstWeekday !== 0) {
+    // First day is not Sunday, create a partial first week
+    const daysUntilSunday = 7 - firstWeekday;
+    weeks.push({ contributionDays: days.slice(0, daysUntilSunday) });
+    i = daysUntilSunday;
+  }
+  
+  // Chunk the rest into 7-day weeks starting on Sunday
+  for (; i < days.length; i += GRID_WEEKDAYS) {
     weeks.push({ contributionDays: days.slice(i, i + GRID_WEEKDAYS) });
   }
+  
   return { weeks };
 }
 

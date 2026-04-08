@@ -4,6 +4,7 @@ import {
   type ContributionCalendar,
   type ContributionDay,
   buildSampleContributionDays,
+  chunkDaysIntoWeeks,
   contributionCalendarToLevelBoard,
   contributionDaysToLevelBoard,
   contributionLevelToGrassLevel,
@@ -107,7 +108,40 @@ describe("contributionDaysToLevelBoard", () => {
       contributionLevel: "SECOND_QUARTILE" as const,
     }));
     const { board } = contributionDaysToLevelBoard(days);
-    expect(board[2][52]).toBe(2);
+    // 2024-01-01 is Monday, so first week is partial (Mon-Sat, 6 days), second week has Sunday
+    // With 2 weeks total, xOffset = 53 - 2 = 51, so week 0 → x=51, week 1 → x=52
+    // Tuesday (2024-01-02, weekday=2) is in first week at x=51
+    expect(board[2][51]).toBe(2);
+  });
+
+  it("chunks days into Sunday-start weeks (Monday start input)", () => {
+    // Test case for Issue #18: Verify chunkDaysIntoWeeks aligns to GitHub's Sunday-start week boundary
+    // Input: 14 days starting from Monday (2024-01-01)
+    // Expected: First week = 6 days (Mon-Sat), Second week = 7 days (Sun-Sat), Third week = 1 day (Sun)
+    const days: ContributionDay[] = Array.from({ length: 14 }, (_, i) => {
+      const d = new Date("2024-01-01T00:00:00Z");
+      d.setUTCDate(1 + i);
+      return {
+        date: d.toISOString().slice(0, 10),
+        contributionCount: i + 1,
+        contributionLevel: "SECOND_QUARTILE" as const,
+      };
+    });
+    const cal = chunkDaysIntoWeeks(days);
+    
+    // First week should be partial (6 days: Mon-Sat)
+    expect(cal.weeks[0].contributionDays).toHaveLength(6);
+    expect(cal.weeks[0].contributionDays[0].date).toBe("2024-01-01"); // Monday
+    expect(cal.weeks[0].contributionDays[5].date).toBe("2024-01-06"); // Saturday
+    
+    // Second week should be full (7 days: Sun-Sat)
+    expect(cal.weeks[1].contributionDays).toHaveLength(7);
+    expect(cal.weeks[1].contributionDays[0].date).toBe("2024-01-07"); // Sunday
+    expect(cal.weeks[1].contributionDays[6].date).toBe("2024-01-13"); // Saturday
+    
+    // Third week should have remaining 1 day (Sunday)
+    expect(cal.weeks[2].contributionDays).toHaveLength(1);
+    expect(cal.weeks[2].contributionDays[0].date).toBe("2024-01-14"); // Sunday
   });
 
   it("maps sample days to deterministic non-trivial weekly profile", () => {
