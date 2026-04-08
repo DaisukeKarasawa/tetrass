@@ -97,7 +97,17 @@ async function fetchContributionCalendar(login, token) {
 }
 function chunkDaysIntoWeeks(days) {
   const weeks = [];
-  for (let i = 0; i < days.length; i += GRID_WEEKDAYS) {
+  if (days.length === 0) {
+    return { weeks };
+  }
+  let i = 0;
+  const firstWeekday = inferredWeekdayAt(days[0]);
+  if (firstWeekday !== 0) {
+    const daysUntilSunday = 7 - firstWeekday;
+    weeks.push({ contributionDays: days.slice(0, daysUntilSunday) });
+    i = daysUntilSunday;
+  }
+  for (; i < days.length; i += GRID_WEEKDAYS) {
     weeks.push({ contributionDays: days.slice(i, i + GRID_WEEKDAYS) });
   }
   return { weeks };
